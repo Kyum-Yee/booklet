@@ -1,0 +1,21 @@
+<!doctype html><meta charset="utf-8"><title>demo-store-time</title><pre id="report">{"state":"loading"}</pre>
+<script type="module">
+import { createStore } from '../src/store.js';
+const out = [];
+const txt = await (await fetch('fixtures/kor_grammar.md')).text();
+let textCalls = 0, textMs = 0;
+const origText = File.prototype.text;
+File.prototype.text = async function () { const t = performance.now(); const r = await origText.call(this); textCalls++; textMs += performance.now() - t; return r; };
+for (const n of [3, 10, 30]) {
+  const store = createStore();
+  const files = Array.from({ length: n }, (_, i) => new File([txt], `batch-${i + 1}_원본.md`));
+  textCalls = 0; textMs = 0;
+  const t0 = performance.now();
+  let res;
+  try {
+    res = await Promise.race([store.addSources(files, { preferOriginal: true }), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout 20s')), 20000))]);
+  } catch (e) { res = { error: String(e) }; }
+  out.push({ n, ms: Math.round(performance.now() - t0), textCalls, textMs: Math.round(textMs), added: res && res.added, error: res && res.error, sources: store.get().sources.length });
+  document.getElementById('report').textContent = JSON.stringify(out, null, 1);
+}
+</script>

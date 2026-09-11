@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>booklet — 문제 조판기</title>
+
+<link rel="stylesheet" href="styles/page.css">
+<link rel="stylesheet" href="styles/ui.css">
+
+<!-- KaTeX: vendor/ 로컬본을 먼저 시도하고, 없으면 CDN으로 자동 대체한다. -->
+<link rel="stylesheet" href="vendor/katex/katex.min.css"
+      onerror="this.onerror=null;this.href='https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.css';">
+<script>
+  // KaTeX 로드 완료(또는 실패)를 app.js가 기다릴 수 있게 약속으로 노출한다.
+  // 4초 안에 못 오면 약속은 false로 풀리지만, 그 뒤에 CDN이 도착하면
+  // "katex-loaded"가 한 번 더 울려 app.js가 수식만 다시 조판한다.
+  window.__katexReady = new Promise(function (resolve) {
+    window.__katexResolve = resolve;
+    setTimeout(function () { resolve(!!window.katex); }, 4000);
+  });
+  window.__katexArrived = function () {
+    if (!window.katex) return;                       // onerror로 대체본을 부르는 중이면 아직 아니다
+    if (window.__katexResolve) window.__katexResolve(true);
+    if (window.__katexAnnounced) return;             // 두 스크립트가 각각 부르므로 한 번만 알린다
+    window.__katexAnnounced = true;
+    window.dispatchEvent(new Event("katex-loaded"));
+  };
+</script>
+<script defer src="vendor/katex/katex.min.js"
+        onerror="this.onerror=null;this.src='https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.js';"
+        onload="window.__katexArrived();"></script>
+</head>
+<body>
+
+<div class="app" id="app">
+
+  <!-- ───────────────────────── 사이드바 ───────────────────────── -->
+  <aside class="sidebar" id="sidebar" aria-label="설정">
+    <header class="sb-head">
+      <h1 class="brand">booklet<small>문제 조판기</small></h1>
+      <button type="button" class="icon-btn" id="btn-collapse" title="사이드바 접기" aria-label="사이드바 접기">〈</button>
+    </header>
+
+    <nav class="tabs" id="tabs" role="tablist" aria-label="설정 탭">
+      <button type="button" class="tab is-on" role="tab" data-tab="files"    aria-selected="true">파일</button>
+      <button type="button" class="tab"       role="tab" data-tab="layout"   aria-selected="false">배치</button>
+      <button type="button" class="tab"       role="tab" data-tab="units"    aria-selected="false">단원·번호</button>
+      <button type="button" class="tab"       role="tab" data-tab="rules"    aria-selected="false">규칙</button>
+      <button type="button" class="tab"       role="tab" data-tab="images"   aria-selected="false">이미지</button>
+      <button type="button" class="tab"       role="tab" data-tab="sheets"   aria-selected="false">시트·차례</button>
+      <button type="button" class="tab"       role="tab" data-tab="export"   aria-selected="false">내보내기</button>
+    </nav>
+
+    <div class="sb-body" id="sb-body">
+
+      <!-- ── 파일 ── -->
+      <section class="panel is-on" id="panel-files" role="tabpanel" aria-label="파일">
+        <fieldset class="grp">
+          <legend>문서 정보</legend>
+          <label class="row"><span>제목</span><input type="text" data-path="title" placeholder="2026 화학 문제집"></label>
+          <label class="row"><span>부제</span><input type="text" data-path="subtitle" placeholder=""></label>
+          <label class="row"><span>과목</span><input type="text" data-path="meta.subject" placeholder="화학"></label>
+          <label class="row"><span>학년</span><input type="text" data-path="meta.grade" placeholder="고2"></label>
+          <label class="row"><span>학원</span><input type="text" data-path="meta.institute" placeholder=""></label>
+          <label class="row"><span>날짜</span><input type="text" data-path="meta.date" placeholder="2026-03-01"></label>
+          <label class="row"><span>회차</span><input type="text" data-path="meta.round" placeholder="1"></label>
+          <label class="row"><span>교시</span><input type="text" data-path="meta.period" placeholder="4"></label>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>원본 파일</legend>
+          <div class="dropzone" id="dz-files" tabindex="0" role="button"
+               aria-label="문제 파일 또는 폴더를 여기에 놓으세요">
+            <strong>파일·폴더를 여기에 놓으세요</strong>
+            <span class="hint">.md .txt .markdown · 이미지도 함께 받습니다</span>
+            <span class="hint"><code>.booklet.json</code>을 놓으면 그 프로젝트를 엽니다</span>
+          </div>
+          <div class="btn-row">
+            <label class="btn" id="btn-pick-files" for="in-files" role="button" tabindex="0">파일 선택</label>
+            <label class="btn" id="btn-pick-dir" for="in-dir" role="button" tabindex="0">폴더 선택</label>
+            <input type="file" id="in-files" class="file-input" multiple accept=".md,.txt,.markdown,.json,image/*">
+            <input type="file" id="in-dir" class="file-input" webkitdirectory directory multiple>
+          </div>
+          <label class="chk"><input type="checkbox" id="opt-prefer-original" checked><span>같은 이름의 <code>_원본</code>·<code>_view</code>가 함께 오면 <code>_원본</code>만 켠다</span></label>
+          <div class="tbl-wrap"><table class="dt" id="file-list"><tbody></tbody></table></div>
+          <p class="note" id="file-summary">불러온 파일이 없습니다.</p>
+          <p class="note">폴더를 놓으면 <code>문제거리/</code>와 <code>_discarded…</code> 아래는 빼고 읽습니다.</p>
+        </fieldset>
+      </section>
+
+      <!-- ── 배치 ── -->
+      <section class="panel" id="panel-layout" role="tabpanel" aria-label="배치" hidden>
+        <fieldset class="grp">
+          <legend>용지</legend>
+          <label class="row"><span>규격</span>
+            <select data-path="layout.page" data-type="page" data-opt="PAGE_SIZE"></select></label>
+          <div class="row2" id="page-custom" hidden>
+            <label><span>폭 mm</span><input type="number" min="80" max="500" step="1" data-path="layout.page.w" data-type="number" data-limit="pageMm"></label>
+            <label><span>높이 mm</span><input type="number" min="80" max="500" step="1" data-path="layout.page.h" data-type="number" data-limit="pageMm"></label>
+          </div>
+          <label class="row"><span>방향</span>
+            <select data-path="layout.orientation" data-opt="ORIENTATION"></select></label>
+          <div class="row4">
+            <label><span>위 mm</span><input type="number" min="0" max="60" step="0.5" data-path="layout.margin.top" data-type="number" data-limit="margin"></label>
+            <label><span>오른쪽</span><input type="number" min="0" max="60" step="0.5" data-path="layout.margin.right" data-type="number" data-limit="margin"></label>
+            <label><span>아래</span><input type="number" min="0" max="60" step="0.5" data-path="layout.margin.bottom" data-type="number" data-limit="margin"></label>
+            <label><span>왼쪽</span><input type="number" min="0" max="60" step="0.5" data-path="layout.margin.left" data-type="number" data-limit="margin"></label>
+          </div>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>격자</legend>
+          <div class="grid-btns" id="grid-btns" role="group" aria-label="격자 선택">
+            <button type="button" class="gb" data-grid="1x1"><i class="g g11"></i>1×1</button>
+            <button type="button" class="gb" data-grid="2x1"><i class="g g21"></i>2×1</button>
+            <button type="button" class="gb" data-grid="1x2"><i class="g g12"></i>1×2</button>
+            <button type="button" class="gb" data-grid="2x2"><i class="g g22"></i>2×2</button>
+          </div>
+          <div class="row2">
+            <label><span>단 간격 mm</span><input type="number" min="0" max="40" step="0.5" data-path="layout.gutter" data-type="number" data-limit="gutter"></label>
+            <label><span>행 간격 mm</span><input type="number" min="0" max="40" step="0.5" data-path="layout.rowGap" data-type="number" data-limit="rowGap"></label>
+          </div>
+          <label class="chk"><input type="checkbox" data-path="layout.columnRule" data-type="bool"><span>단 사이 세로선</span></label>
+          <label class="chk"><input type="checkbox" data-path="layout.rowRule" data-type="bool"><span>행 사이 가로선</span></label>
+          <label class="row"><span>채우는 순서</span>
+            <select data-path="layout.fillOrder" data-opt="FILL_ORDER"></select></label>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>글꼴</legend>
+          <label class="row"><span>글꼴</span>
+            <select id="font-preset" data-opt="FONT_FAMILY"></select></label>
+          <label class="row" id="font-custom-row" hidden><span>font-family</span>
+            <input type="text" data-path="layout.font.family" placeholder="'Noto Serif KR', serif"></label>
+          <div class="row3">
+            <label><span>크기 pt</span><input type="number" min="6" max="20" step="0.25" data-path="layout.font.size" data-type="number" data-limit="fontSize"></label>
+            <label><span>줄높이</span><input type="number" min="1" max="2.4" step="0.05" data-path="layout.font.lineHeight" data-type="number" data-limit="lineHeight"></label>
+            <label><span>수식 배율</span><input type="number" min="0.6" max="1.6" step="0.05" data-path="layout.font.mathScale" data-type="number" data-limit="mathScale"></label>
+          </div>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>머리말·꼬리말</legend>
+          <div class="row3">
+            <label><span>머리 왼쪽</span><input type="text" data-path="layout.header.left"></label>
+            <label><span>가운데</span><input type="text" data-path="layout.header.center"></label>
+            <label><span>오른쪽</span><input type="text" data-path="layout.header.right"></label>
+          </div>
+          <div class="row3">
+            <label><span>꼬리 왼쪽</span><input type="text" data-path="layout.footer.left"></label>
+            <label><span>가운데</span><input type="text" data-path="layout.footer.center"></label>
+            <label><span>오른쪽</span><input type="text" data-path="layout.footer.right"></label>
+          </div>
+          <p class="note" id="header-tokens">쓸 수 있는 토큰: —</p>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>문항</legend>
+          <label class="chk"><input type="checkbox" data-path="layout.examStyle" data-type="bool"><span>모의고사(수능) 스타일</span></label>
+          <div class="row2">
+            <label><span>문항 간격 mm</span><input type="number" min="0" max="30" step="0.5" data-path="layout.problemGap" data-type="number" data-limit="problemGap"></label>
+            <label><span>칸 아래 여유 mm</span><input type="number" min="0" max="15" step="0.5" data-path="layout.cellSlack" data-type="number" data-limit="cellSlack" title="측정 오차로 마지막 줄이 잘리지 않게 칸 아래에 비워 두는 높이"></label>
+            <label><span>번호 스타일</span>
+              <select data-path="layout.numberStyle" data-opt="NUMBER_STYLE"></select></label>
+          </div>
+          <label class="chk"><input type="checkbox" data-path="layout.showTitle" data-type="bool"><span>문항 제목 표시(원문에 제목이 있을 때)</span></label>
+          <label class="chk"><input type="checkbox" data-path="layout.showTime" data-type="bool"><span>제한 시간 표시</span></label>
+          <label class="chk"><input type="checkbox" data-path="layout.showRef" data-type="bool"><span>출처 표시</span></label>
+          <label class="chk"><input type="checkbox" data-path="layout.showSrcNum" data-type="bool"><span>원문 번호 병기</span></label>
+          <div class="row2">
+            <label><span>지문 스타일</span>
+              <select data-path="layout.passageStyle" data-opt="PASSAGE_STYLE"></select></label>
+            <label><span>선지 스타일</span>
+              <select data-path="layout.choiceStyle" data-opt="CHOICE_STYLE"></select></label>
+          </div>
+        </fieldset>
+
+        <!-- 항목은 options.js의 KEEP_KEYS가 그대로 채운다(라벨·설명이 한 곳에만 적힌다). -->
+        <fieldset class="grp">
+          <legend>붙여 두기(keep)</legend>
+          <div id="keep-list"></div>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>쪽당 문항 수</legend>
+          <div class="row2">
+            <label><span>최소</span><input type="number" step="1" data-path="layout.perPage.min" data-type="number" data-limit="perPageMin" title="한 쪽에서 시작하는 문항 수의 최소. 0이면 제한 없음"></label>
+            <label><span>최대</span><input type="number" step="1" data-path="layout.perPage.max" data-type="number" data-limit="perPageMax" title="한 쪽에서 시작하는 문항 수의 최대. 0이면 제한 없음"></label>
+          </div>
+          <p class="note">0은 제한 없음. 그 쪽에서 <b>시작</b>하는 문항만 셉니다(문제 시트, 시트 마지막 쪽은 최소에서 면제).</p>
+          <label class="chk"><input type="checkbox" data-path="layout.perPageFont.enabled" data-type="bool"><span>최소 미달 시 글자 크기 줄이기</span></label>
+          <div class="row2">
+            <label><span>최소 pt</span><input type="number" step="0.25" data-path="layout.perPageFont.minSize" data-type="number" data-limit="perPageMinFont" title="이 크기까지만 줄인다"></label>
+            <label><span>단계 pt</span><input type="number" step="0.05" data-path="layout.perPageFont.step" data-type="number" data-limit="perPageFontStep" title="한 번에 줄이는 폭"></label>
+          </div>
+          <p class="note">쪽별 예외 — 적은 쪽만 전역 대신 이 값을 씁니다(0 = 그 쪽은 제한 없음).</p>
+          <div class="tbl-wrap"><table class="dt" id="perpage-rules">
+            <thead><tr><th>쪽</th><th>최소</th><th>최대</th><th></th></tr></thead>
+            <tbody></tbody></table></div>
+          <div class="btn-row">
+            <button type="button" class="btn" id="btn-perpage-add">예외 추가</button>
+          </div>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>도형·단원 띠</legend>
+          <div class="row2">
+            <label><span>도형 모드</span>
+              <select data-path="layout.figure.mode" data-opt="FIGURE_MODE"></select></label>
+            <label><span>최대 폭 %</span><input type="number" min="20" max="100" step="5" data-path="layout.figure.maxWidth" data-type="number" data-limit="figureMaxWidth"></label>
+          </div>
+          <label class="chk"><input type="checkbox" data-path="layout.unitBand.enabled" data-type="bool"><span>대단원 띠 표시</span></label>
+          <label class="row"><span>대단원 형식</span>
+            <select data-path="layout.unitBand.style" data-opt="UNIT_BAND_STYLE"></select></label>
+          <label class="chk"><input type="checkbox" data-path="layout.subunitBand.enabled" data-type="bool"><span>소단원 띠 표시</span></label>
+        </fieldset>
+      </section>
+
+      <!-- ── 단원·번호 ── -->
+      <section class="panel" id="panel-units" role="tabpanel" aria-label="단원·번호" hidden>
+        <fieldset class="grp">
+          <legend>번호</legend>
+          <label class="row"><span>매기는 방식</span>
+            <select data-path="numbering.mode" data-opt="NUMBERING_MODE"></select></label>
+          <div class="row2">
+            <label><span>시작 번호</span><input type="number" min="0" max="999" step="1" data-path="numbering.start" data-type="number" data-limit="numberStart"></label>
+            <label><span>자릿수(0 채움)</span><input type="number" min="0" max="4" step="1" data-path="numbering.pad" data-type="number" data-limit="numberPad"></label>
+          </div>
+          <label class="row"><span>단원 도출</span>
+            <select data-path="units.source" data-opt="UNITS_SOURCE"></select></label>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>소스 단위 일괄 지정</legend>
+          <div class="row2">
+            <label><span>소스</span><select id="bulk-source"></select></label>
+            <label><span>&nbsp;</span><button type="button" class="btn" id="btn-bulk-apply">적용</button></label>
+          </div>
+          <div class="row2">
+            <label><span>대단원</span><input type="text" id="bulk-unit" list="dl-units"></label>
+            <label><span>소단원</span><input type="text" id="bulk-subunit" list="dl-subunits"></label>
+          </div>
+          <p class="note">선택한 소스의 모든 문항에 적용됩니다(<code>s1#*</code> 키로 저장).</p>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>대단원 순서</legend>
+          <ol class="ord" id="unit-order"></ol>
+          <p class="note" id="subunit-order-note">대단원을 고르면 소단원 순서를 바꿀 수 있습니다.</p>
+          <ol class="ord" id="subunit-order"></ol>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>문항</legend>
+          <div class="tbl-wrap tall"><table class="dt" id="unit-table">
+            <thead><tr><th>번호</th><th>원번호</th><th>제목</th><th>소스</th><th>과목</th><th>대단원</th><th>소단원</th><th title="제외">×</th></tr></thead>
+            <tbody></tbody></table></div>
+          <datalist id="dl-units"></datalist>
+          <datalist id="dl-subunits"></datalist>
+        </fieldset>
+      </section>
+
+      <!-- ── 규칙 ── -->
+      <section class="panel" id="panel-rules" role="tabpanel" aria-label="규칙" hidden>
+        <fieldset class="grp">
+          <legend>포맷 프로파일</legend>
+          <label class="row"><span>프로파일</span><select id="prof-select"></select></label>
+          <div class="btn-row">
+            <button type="button" class="btn" id="btn-prof-clone">복제해서 편집</button>
+            <button type="button" class="btn" id="btn-prof-validate">검증</button>
+            <button type="button" class="btn" id="btn-prof-save">저장</button>
+            <button type="button" class="btn danger" id="btn-prof-delete">삭제</button>
+          </div>
+          <textarea id="prof-json" class="code" rows="14" spellcheck="false" placeholder="프로파일을 고르고 [복제해서 편집]을 누르세요."></textarea>
+          <div class="row2">
+            <label><span>테스트 소스</span><select id="prof-test-source"></select></label>
+            <label><span>&nbsp;</span><button type="button" class="btn" id="btn-prof-test">테스트 파싱</button></label>
+          </div>
+          <div class="result" id="prof-result"></div>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>인라인 규칙</legend>
+          <div class="tbl-wrap"><table class="dt" id="rule-table">
+            <thead><tr><th>켬</th><th>이름</th><th>패턴</th><th>플래그</th><th>치환</th><th>범위</th><th>과목</th><th></th></tr></thead>
+            <tbody></tbody></table></div>
+          <div class="btn-row">
+            <button type="button" class="btn" id="btn-rule-add">규칙 추가</button>
+            <button type="button" class="btn" id="btn-rule-reset">기본 규칙으로</button>
+          </div>
+          <label class="row"><span>미리보기</span>
+            <input type="text" id="rule-preview-in" value="'나'는 **정말** ㉠그렇다고 $x^2$ 말했다."></label>
+          <label class="row"><span>적용 범위</span>
+            <select id="rule-preview-scope" data-opt="RULE_SCOPE" data-opt-omit="all" data-opt-pick="choices"></select></label>
+          <label class="row"><span>과목</span>
+            <select id="rule-preview-subject" data-opt="SUBJECT" data-opt-omit="auto" data-opt-pick="국어"></select></label>
+          <div class="result preview-out" id="rule-preview-out"></div>
+        </fieldset>
+      </section>
+
+      <!-- ── 이미지 ── -->
+      <section class="panel" id="panel-images" role="tabpanel" aria-label="이미지" hidden>
+        <fieldset class="grp">
+          <legend>업로드</legend>
+          <div class="dropzone" id="dz-images" tabindex="0" role="button" aria-label="이미지를 여기에 놓으세요">
+            <strong>이미지를 여기에 놓으세요</strong>
+            <span class="hint">.png .jpg .jpeg .gif .webp .svg</span>
+          </div>
+          <div class="btn-row">
+            <label class="btn" id="btn-pick-images" for="in-images" role="button" tabindex="0">이미지 선택</label>
+            <input type="file" id="in-images" class="file-input" multiple accept="image/*">
+          </div>
+          <div class="thumbs" id="image-list"></div>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>문항에 배치</legend>
+          <div class="tbl-wrap"><table class="dt" id="place-table">
+            <thead><tr><th>이미지</th><th>문항</th><th>자리</th><th>폭</th><th>캡션</th><th></th></tr></thead>
+            <tbody></tbody></table></div>
+          <datalist id="dl-image-width"></datalist>
+          <button type="button" class="btn" id="btn-place-add">배치 추가</button>
+          <p class="note">원문에 <code>[이미지: 이름]</code>이 있으면 같은 이름의 업로드 이미지가 자동으로 들어갑니다.</p>
+        </fieldset>
+      </section>
+
+      <!-- ── 시트·차례 ── -->
+      <section class="panel" id="panel-sheets" role="tabpanel" aria-label="시트·차례" hidden>
+        <fieldset class="grp">
+          <legend>표지</legend>
+          <label class="chk"><input type="checkbox" data-path="sheets.cover.enabled" data-type="bool"><span>표지 넣기</span></label>
+          <textarea class="code" rows="5" data-path="sheets.cover.lines" data-type="lines"
+                    placeholder="한 줄에 하나씩&#10;2026 화학 문제집&#10;고2 · 3월"></textarea>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>시트</legend>
+          <label class="chk"><input type="checkbox" data-path="sheets.problems" data-type="bool"><span>문제 시트</span></label>
+          <label class="chk"><input type="checkbox" data-path="sheets.answers.enabled" data-type="bool"><span>빠른 정답 시트</span></label>
+          <div class="row2">
+            <label><span>정답 제목</span><input type="text" data-path="sheets.answers.title"></label>
+            <label><span>한 줄 칸 수</span><input type="number" min="2" max="20" step="1" data-path="sheets.answers.perRow" data-type="number" data-limit="perRow"></label>
+          </div>
+          <label class="chk"><input type="checkbox" data-path="sheets.explanations.enabled" data-type="bool"><span>해설 시트</span></label>
+          <div class="row3">
+            <label><span>해설 제목</span><input type="text" data-path="sheets.explanations.title"></label>
+            <label><span>단</span><input type="number" min="1" max="3" step="1" data-path="sheets.explanations.grid.cols" data-type="number" data-limit="explGrid"></label>
+            <label><span>행</span><input type="number" min="1" max="3" step="1" data-path="sheets.explanations.grid.rows" data-type="number" data-limit="explGrid"></label>
+          </div>
+          <label class="chk"><input type="checkbox" data-path="sheets.explanations.renamePassage" data-type="bool"><span>해설의 <code>[지문]</code>을 “지문 요약”으로</span></label>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>차례</legend>
+          <label class="chk"><input type="checkbox" data-path="sheets.toc.enabled" data-type="bool"><span>차례 넣기</span></label>
+          <label class="chk"><input type="checkbox" data-path="sheets.toc.front" data-type="bool"><span>맨 앞에 전체 차례</span></label>
+          <label class="chk"><input type="checkbox" data-path="sheets.toc.perUnit" data-type="bool"><span>대단원마다 소단원 차례</span></label>
+          <label class="chk"><input type="checkbox" data-path="sheets.toc.pageNumbers" data-type="bool"><span>쪽번호 표시</span></label>
+          <label class="row"><span>차례 제목</span><input type="text" data-path="sheets.toc.title"></label>
+        </fieldset>
+      </section>
+
+      <!-- ── 내보내기 ── -->
+      <section class="panel" id="panel-export" role="tabpanel" aria-label="내보내기" hidden>
+        <fieldset class="grp">
+          <legend>인쇄</legend>
+          <button type="button" class="btn wide primary" id="btn-print">인쇄 / PDF로 저장 <kbd>Ctrl·⌘ P</kbd></button>
+          <p class="note">브라우저 인쇄 대화상자에서 여백을 “없음”, 배율을 100%로 두세요.</p>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>프로젝트</legend>
+          <div class="btn-row">
+            <button type="button" class="btn" id="btn-json-save">JSON 저장 <kbd>Ctrl·⌘ S</kbd></button>
+            <label class="btn" id="btn-json-open" for="in-json" role="button" tabindex="0">JSON 열기</label>
+            <input type="file" id="in-json" class="file-input" accept=".json,.booklet.json,application/json">
+          </div>
+          <div class="btn-row">
+            <button type="button" class="btn" id="btn-standalone">독립 HTML 저장</button>
+            <button type="button" class="btn danger" id="btn-reset">프로젝트 초기화</button>
+          </div>
+          <p class="note" id="storage-info">저장 용량: —</p>
+        </fieldset>
+      </section>
+
+    </div>
+  </aside>
+
+  <!-- ───────────────────────── 본문 ───────────────────────── -->
+  <main class="main">
+    <div class="statusbar" id="statusbar">
+      <button type="button" class="icon-btn" id="btn-expand" title="사이드바 펴기" aria-label="사이드바 펴기">〉</button>
+      <button type="button" class="btn" id="btn-edit" title="설정 사이드바를 펴서 고칩니다">편집</button>
+      <span class="stat">소스 <b id="st-sources">0</b></span>
+      <span class="stat">문항 <b id="st-problems">0</b></span>
+      <span class="stat">쪽 <b id="st-pages">0</b></span>
+      <button type="button" class="stat warn" id="st-warnings-btn" aria-expanded="false">경고 <b id="st-warnings">0</b></button>
+      <span class="spacer"></span>
+      <label class="zoom"><span>줌</span>
+        <input type="range" id="zoom" data-limit="zoom" data-limit-scale="100" step="5" value="70">
+        <b id="zoom-val">70%</b>
+      </label>
+      <button type="button" class="btn primary" id="btn-print2">인쇄</button>
+    </div>
+
+    <div class="preview" id="preview" aria-label="미리보기"></div>
+    <div class="empty" id="empty-hint">
+      <p>왼쪽 <b>파일</b> 탭에서 문제 파일이나 폴더를 넣으면 여기에 조판 결과가 나타납니다.</p>
+    </div>
+  </main>
+</div>
+
+<!-- 경고 패널 -->
+<section class="warnings" id="warnings" hidden aria-label="경고">
+  <header class="w-head">
+    <b>경고 <span id="w-count">0</span></b>
+    <button type="button" class="icon-btn" id="btn-w-close" aria-label="닫기">✕</button>
+  </header>
+  <ol class="w-list" id="w-list"></ol>
+</section>
+
+<div class="toast" id="toast" hidden role="status" aria-live="polite"></div>
+
+<!-- 자동 검증 통로: ?debug=1로 열면 조판 요약이 JSON으로 여기에 쌓인다(화면에는 안 보인다). -->
+<pre id="report" hidden></pre>
+
+<script type="module" src="src/app.js"></script>
+</body>
+</html>

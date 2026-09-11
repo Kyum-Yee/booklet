@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>booklet — 실데이터 조판 검증</title>
+<link rel="stylesheet" href="../styles/page.css">
+<style>
+  /* 데모 껍데기만. 조판 결과의 생김새는 전부 page.css가 정한다. */
+  body { margin: 0; font: 13px/1.5 -apple-system, "Apple SD Gothic Neo", sans-serif; background: #e9e9ee; }
+  #bar {
+    position: sticky; top: 0; z-index: 9; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    padding: 6px 10px; background: #22252b; color: #eee; font-size: 12px;
+  }
+  #bar button, #bar label { background: #3a3f48; color: #eee; border: 1px solid #555; border-radius: 3px; padding: 2px 8px; cursor: pointer; }
+  #bar button.on { background: #f0f0f0; color: #111; }
+  #bar .sp { flex: 1 1 auto; }
+  #bar code { color: #8fd; }
+  #report {
+    margin: 0; padding: 8px 10px; background: #14161a; color: #cfe; font: 11px/1.45 ui-monospace, Menlo, monospace;
+    white-space: pre-wrap; word-break: break-all; max-height: 34vh; overflow: auto;
+  }
+  #preview { min-height: 40vh; }
+  @media print { #bar, #report { display: none !important; } body { background: #fff; } }
+</style>
+</head>
+<body>
+<div id="bar">
+  <span>격자</span>
+  <button data-grid="1x1">1×1</button>
+  <button data-grid="2x1">2×1</button>
+  <button data-grid="1x2">1×2</button>
+  <button data-grid="2x2">2×2</button>
+  <span>·</span>
+  <button id="btn-exam">수능식</button>
+  <span>·</span>
+  <span>시트</span>
+  <button data-sheet="all">전부</button>
+  <button data-sheet="problems">문제만</button>
+  <button data-sheet="answers">정답만</button>
+  <button data-sheet="explanations">해설만</button>
+  <span class="sp"></span>
+  <code id="what">…</code>
+</div>
+<pre id="report">{"state":"loading"}</pre>
+<div id="preview"></div>
+
+<script>
+/* KaTeX는 모듈보다 먼저, 전역 window.katex로 있어야 layout.js가 수식을 그린다.
+   vendor/가 있으면 그쪽(오프라인 · file:// 에서도 확실), 없으면 CDN. */
+(function () {
+  const local = '../vendor/katex/katex.min.js';
+  const cdn = 'https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.js';
+  const cssLocal = '../vendor/katex/katex.min.css';
+  const cssCdn = 'https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.css';
+  const css = document.createElement('link');
+  css.rel = 'stylesheet';
+  css.href = cssLocal;
+  css.onerror = () => { css.href = cssCdn; };
+  document.head.appendChild(css);
+  window.__katexReady = new Promise((resolve) => {
+    const s = document.createElement('script');
+    s.src = local;
+    s.onload = () => resolve('local');
+    s.onerror = () => {
+      const t = document.createElement('script');
+      t.src = cdn;
+      t.onload = () => resolve('cdn');
+      t.onerror = () => resolve('none');
+      document.head.appendChild(t);
+    };
+    document.head.appendChild(s);
+  });
+})();
+</script>
+
+<script type="module">
+import { parseProject } from '../src/parser.js';
+import { renderProblem, renderExplanation, renderAnswerTable } from '../src/render.js';
+import { groupByUnits } from '../src/units.js';
+import { asciiToSvg } from '../src/ascii2svg.js';
+import { DEFAULT_RULES } from '../src/rules.js';
+import { buildBooklet } from '../src/layout.js';
+
+/* ───────────────────────── 0. URL 매개변수 ───────────────────────── */
+
+const Q = new URLSearchParams(location.search);
+const JSON_PATH = Q.get('json') || 'fixtures/project_chem.json';
+const GRID = /^(\d)x(\d)$/.exec(Q.get('grid') || '2x1') || [null, '2', '1'];
+const EXAM = Q.get('exam') === '1' || Q.get('exam') === 'true';
+const SHEET = Q.get('sheet') || 'all';
+const ONLY = Q.get('only') ? Number(Q.get('only')) : null;   // 스크린샷용: 이 쪽만 보인다
+/* full = 파싱+조판 · parse = 파싱까지 · none = JSON 읽기까지.
+   셸이 벽시계를 잴 때 `full − none`이 파이프라인 값, `parse − none`이 파싱 값이 된다. */
+const STAGE = Q.get('stage') || 'full';
+const ZOOM = Q.get('zoom') ? Number(Q.get('zoom')) : null;
+/* rowrule=1 이면 행 사이 가로 괘선(1×2·2×2 확인용), rowrule=0 이면 끈다. 없으면 픽스처 값 그대로. */
+const ROWRULE = Q.has('rowrule') ? Q.get('rowrule') === '1' : null;
+const FILL = Q.get('fill') || null;                          // auto | column | row (fillOrder 덮어쓰기)
+/* title=1 이면 문항 제목(.q-title)을 번호 뒤에 병기한다 — mdheading 문항 확인용. */
+const TITLE = Q.has('title') ? Q.get('title') === '1' : null;
+/* 쪽당 문항 수: min·max는 전역(0=제한 없음), rules는 "쪽:최소:최대" 목록을 쉼표로 잇는다(예 5:2:3,7:1:1).
+   band=0이면 단원 제목과 첫 문항을 붙이지 않는다(옵션 1 끄기), font=0이면 글자 크기 자동 조절을 끈다. */
+const PPMIN = Q.has('min') ? Number(Q.get('min')) : null;
+const PPMAX = Q.has('max') ? Number(Q.get('max')) : null;
+const PPFONT = Q.has('font') ? Q.get('font') !== '0' : null;
+const PPMINSIZE = Q.has('minsize') ? Number(Q.get('minsize')) : null;
+const BAND = Q.has('band') ? Q.get('band') === '1' : null;
+/* pass=0이면 지문·첫 문항 붙이기를, shrink=0이면 붙여 두기용 글자 축소를 끈다(대조군). */
+const PASS = Q.has('pass') ? Q.get('pass') === '1' : null;
+const SHRINK = Q.has('shrink') ? Q.get('shrink') === '1' : null;
+const PPRULES = (Q.get('rules') || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)
+  .map((s) => {
+    const [page, min, max] = s.split(':').map((x) => Number(x));
+    return { page, min: min || 0, max: max || 0 };
+  })
+  .filter((r) => Number.isFinite(r.page) && r.page > 0);
+
+document.getElementById('what').textContent = `${JSON_PATH} · ${GRID[1]}×${GRID[2]} · exam=${EXAM ? 1 : 0} · sheet=${SHEET}`;
+for (const b of document.querySelectorAll('#bar [data-grid]')) {
+  b.classList.toggle('on', b.dataset.grid === `${GRID[1]}x${GRID[2]}`);
+  b.onclick = () => go({ grid: b.dataset.grid });
+}
+for (const b of document.querySelectorAll('#bar [data-sheet]')) {
+  b.classList.toggle('on', b.dataset.sheet === SHEET);
+  b.onclick = () => go({ sheet: b.dataset.sheet });
+}
+const examBtn = document.getElementById('btn-exam');
+examBtn.classList.toggle('on', EXAM);
+examBtn.onclick = () => go({ exam: EXAM ? '0' : '1' });
+
+/** 매개변수를 바꿔 같은 페이지를 다시 연다(다른 값은 유지). */
+function go(patch) {
+  const q = new URLSearchParams(location.search);
+  for (const k of Object.keys(patch)) q.set(k, patch[k]);
+  location.search = q.toString();
+}
+
+/* ───────────────────────── 1. 프로젝트 읽기 ───────────────────────── */
+
+/** json 매개변수를 이 문서 기준의 절대 URL로 푼다(file:// 절대경로도 그대로 받는다). */
+function resolveJsonUrl(p) {
+  if (/^(file|https?):/i.test(p)) return p;
+  if (p.startsWith('/')) return 'file://' + p;
+  return new URL(p, location.href).href;
+}
+
+const report = document.getElementById('report');
+/** 리포트를 JSON 한 덩어리로 찍는다(chrome.sh report 모드가 이 텍스트만 긁어 간다). */
+function emit(obj) {
+  report.textContent = JSON.stringify({ ...obj, __done: 1 }, null, 1);
+  document.title = 'booklet — ' + (obj.error ? 'ERROR' : `${obj.pages}쪽`);
+}
+
+/* 시계에 관하여 —
+   --virtual-time-budget 아래에서는 렌더러 프로세스의 시간이 통째로 가상 시간이 된다:
+   한 작업이 도는 동안 performance.now()·Date.now()는 얼어붙고, await로 쉬는 순간 몇 초씩
+   건너뛴다. 워커 스레드도 같은 렌더러에 속하므로 함께 얼어붙는다(측정: 88쪽 조판에 0ms).
+   그래서 여기서 재는 ms는 "가상 시간이 꺼져 있을 때만" 참이다 — 헤드리스에서 0이 나오면
+   시계가 언 것으로 보고 ms를 null로 두고 clock에 그 사실을 적는다. 헤드리스의 실제 벽시계는
+   chrome.sh를 감싼 셸이 잰다. 사람이 브라우저로 이 데모를 열면 이 시계가 그대로 맞는다.
+   (setTimeout 감시자는 두지 않는다 — 가상 시간에서는 몇 초짜리 타이머도 즉시 터져
+    워커의 대답을 늘 앞질러 버려서, 감시자가 곧 시계를 죽이는 원인이 된다.
+    워커가 못 뜨는 경우는 생성자 예외와 onerror로만 걸러낸다.) */
+function makeClock() {
+  let w;
+  try {
+    const src =
+      'let t=0;onmessage=function(e){' +
+      'if(e.data==="start"){t=performance.now();postMessage(0);}' +
+      'else{postMessage(performance.now()-t);}};';
+    w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+  } catch (err) {
+    return null;
+  }
+  let dead = false;
+  const ask = (msg) => new Promise((r) => {
+    if (dead) return r(null);
+    w.onmessage = (e) => r(e.data);
+    w.onerror = () => { dead = true; r(null); };
+    w.onmessageerror = () => { dead = true; r(null); };
+    try { w.postMessage(msg); } catch (err) { dead = true; r(null); }
+  });
+  return { start: () => ask('start'), lap: () => ask('lap'), stop: () => ask('stop') };
+}
+
+/** 워커가 돌려준 값이 쓸 만한 ms인지. */
+function ms(v) {
+  return typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : null;
+}
+
+/** Map이든 평범한 객체든 { 키: 값 } 평면 객체로 편다. */
+function plain(m) {
+  if (!m) return {};
+  if (typeof m.entries === 'function') return Object.fromEntries([...m.entries()]);
+  return { ...m };
+}
+
+try {
+  const url = resolveJsonUrl(JSON_PATH);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url} — HTTP ${res.status}`);
+  const project = await res.json();
+  await window.__katexReady;
+
+  /* 격자·수능식·시트 토글을 URL대로 덮어쓴다(픽스처 원본은 건드리지 않는다). */
+  project.layout = {
+    ...(project.layout || {}),
+    grid: { cols: Number(GRID[1]), rows: Number(GRID[2]) },
+    examStyle: EXAM,
+    ...(ROWRULE == null ? {} : { rowRule: ROWRULE }),
+    ...(FILL ? { fillOrder: FILL } : {}),
+    ...(TITLE == null ? {} : { showTitle: TITLE }),
+    ...(PPMIN == null && PPMAX == null
+      ? {}
+      : {
+          perPage: {
+            ...((project.layout || {}).perPage || {}),
+            ...(PPMIN == null ? {} : { min: PPMIN }),
+            ...(PPMAX == null ? {} : { max: PPMAX }),
+          },
+        }),
+    ...(PPRULES.length ? { perPageRules: PPRULES } : {}),
+    ...(PPFONT == null && PPMINSIZE == null
+      ? {}
+      : {
+          perPageFont: {
+            enabled: PPFONT == null ? true : PPFONT,
+            minSize: PPMINSIZE == null ? 8 : PPMINSIZE,
+            step: 0.25,
+          },
+        }),
+    ...(BAND == null && PASS == null && SHRINK == null
+      ? {}
+      : {
+          keep: {
+            ...((project.layout || {}).keep || {}),
+            ...(BAND == null ? {} : { bandWithFirst: BAND }),
+            ...(PASS == null ? {} : { passageWithFirst: PASS }),
+            ...(SHRINK == null ? {} : { shrinkToKeep: SHRINK }),
+          },
+        }),
+  };
+  const sheets = project.sheets || {};
+  project.sheets = {
+    ...sheets,
+    problems: SHEET === 'all' || SHEET === 'problems',
+    answers: { ...(sheets.answers || {}), enabled: SHEET === 'all' || SHEET === 'answers' },
+    explanations: { ...(sheets.explanations || {}), enabled: SHEET === 'all' || SHEET === 'explanations' },
+    toc: { ...(sheets.toc || {}), enabled: (sheets.toc || {}).enabled !== false && SHEET === 'all' },
+  };
+
+  /* ─────────────────── 2. 실제 파이프라인 ─────────────────── */
+
+  if (STAGE === 'none') {
+    emit({ json: JSON_PATH, stage: 'none', sources: (project.sources || []).length, pages: 0, problems: 0 });
+    throw { __stop: 1 };
+  }
+  const clock = makeClock();
+  let clockOk = false;
+  if (clock) clockOk = (await clock.start()) === 0;
+  const t0 = performance.now();
+  const doc = parseProject(project);
+  const msParseWall = clockOk ? ms(await clock.lap()) : null;
+
+  const figureMode = (key, idx) => {
+    const o = (project.overrides || {})[key];
+    const f = o && o.figures && o.figures[String(idx)];
+    return f || (project.layout.figure && project.layout.figure.mode) || 'svg';
+  };
+  doc.renderers = { renderProblem, renderExplanation, renderAnswerTable, groupByUnits, asciiToSvg };
+  doc.figureMode = figureMode;
+  doc.ctx = {
+    settings: project.layout,
+    rules: (project.rules && project.rules.length ? project.rules : DEFAULT_RULES),
+    images: project.images || [],
+    imagePlacements: project.imagePlacements || [],
+    figureMode,
+  };
+  project.rules = doc.ctx.rules;
+
+  const mount = document.getElementById('preview');
+  if (STAGE === 'parse') {
+    emit({ json: JSON_PATH, stage: 'parse', problems: (doc.problems || []).length, pages: 0 });
+    throw { __stop: 1 };
+  }
+  window.__TRACE = Q.get('trace') || null;
+  const built = await buildBooklet(doc, project, mount);
+  const t1 = performance.now();
+  let msWall = clockOk ? ms(await clock.stop()) : null;
+  let msParse = msParseWall;
+  /* 여러 쪽을 조판하고도 0ms가 나왔다면 시계가 가상 시간에 얼어붙은 것이다 — 0을 그대로
+     "빨랐다"로 읽으면 안 되므로 값을 비우고 언 사실을 clock에 남긴다. */
+  const frozen = clockOk && msWall === 0 && built.pages.length > 2;
+  const clockKind = !clockOk ? 'none' : frozen ? 'frozen(virtual-time)' : 'worker';
+  if (frozen) { msWall = null; msParse = null; }
+
+  /* ─────────────────── 3. 리포트 ─────────────────── */
+
+  // 차례 줄: 앞 차례(사람이 보는 그대로) — 라벨은 DOM 텍스트, 쪽은 .toc-page.
+  const tocRows = [];
+  const frontPage = mount.querySelector('.page[data-sheet="toc"]');
+  const scope = frontPage ? frontPage.parentElement : mount;
+  for (const nav of scope.querySelectorAll('.page[data-sheet="toc"] .toc')) {
+    for (const row of nav.querySelectorAll('.toc-row')) {
+      const pageText = (row.querySelector('.toc-page') || {}).textContent || '';
+      const n = parseInt(pageText.replace(/[^\d]/g, ''), 10);
+      tocRows.push({
+        level: row.classList.contains('toc-l1') ? 1 : 2,
+        label: (row.querySelector('.toc-label') || {}).textContent || '',
+        page: Number.isFinite(n) ? n : null,
+      });
+    }
+  }
+
+  /* 차례 줄이 칸 밖으로 밀려 잘리는지 — 픽셀로 본다.
+     `.cell`은 overflow:hidden이라 줄이 넘치면 오른쪽 끝(=쪽번호 뒷자리)이 소리 없이 잘린다.
+     DOM 텍스트는 멀쩡한 "14"여서 텍스트 대조로는 절대 잡히지 않는다("14"가 "1"로 보이던 결함). */
+  const tocClipped = [];
+  for (const nav of mount.querySelectorAll('.toc')) {
+    const cell = nav.closest('.cell') || nav.closest('.page');
+    if (!cell) continue;
+    const cs = getComputedStyle(cell);
+    const limit = cell.getBoundingClientRect().right - (parseFloat(cs.paddingRight) || 0);
+    for (const row of nav.querySelectorAll('.toc-row')) {
+      const pageEl = row.querySelector('.toc-page');
+      const right = (pageEl || row).getBoundingClientRect().right;
+      if (right - limit > 0.5) {
+        tocClipped.push({
+          label: (row.querySelector('.toc-label') || {}).textContent || '',
+          page: pageEl ? pageEl.textContent.trim() : null,
+          overBy: Math.round((right - limit) * 10) / 10,
+        });
+      }
+    }
+  }
+
+  // 단원별 첫 쪽의 실측값: 그 단원 문항들의 problemPage 최솟값.
+  const groups = groupByUnits(doc.problems, project.units || {});
+  const problemPage = plain(built.index.problemPage);
+  const firstPageOfEachUnit = {};
+  const firstPageOfEachSubunit = {};
+  for (const g of groups) {
+    let min = null;
+    for (const s of g.subunits || []) {
+      let smin = null;
+      for (const p of s.problems || []) {
+        const pg = problemPage[p.key];
+        if (pg != null && (smin == null || pg < smin)) smin = pg;
+      }
+      firstPageOfEachSubunit[JSON.stringify([g.unit, s.subunit])] = smin;
+      if (smin != null && (min == null || smin < min)) min = smin;
+    }
+    firstPageOfEachUnit[g.unit] = min;
+  }
+
+  // 차례 쪽번호가 실측과 어긋난 줄(이 배열이 비어야 통과).
+  const unitPage = plain(built.index.unitPage);
+  const subunitPage = plain(built.index.subunitPage);
+  const mismatch = [];
+  for (const [unit, real] of Object.entries(firstPageOfEachUnit)) {
+    const got = unitPage[unit];
+    if (real != null && got != null && got > real) mismatch.push({ kind: 'unit', unit, index: got, real });
+  }
+  for (const [k, real] of Object.entries(firstPageOfEachSubunit)) {
+    const got = subunitPage[k];
+    if (real != null && got != null && got > real) mismatch.push({ kind: 'subunit', key: k, index: got, real });
+  }
+  // 차례에 찍힌 쪽 ↔ index 대조 (라벨이 아니라 순서로 맞춘다: front 항목 순서 = groups 순서)
+  const tocMismatch = [];
+  {
+    const expect = [];
+    for (const g of groups) {
+      expect.push({ level: 1, page: unitPage[g.unit] ?? firstPageOfEachUnit[g.unit] });
+      for (const s of g.subunits || []) {
+        expect.push({ level: 2, page: subunitPage[JSON.stringify([g.unit, s.subunit])] ?? firstPageOfEachSubunit[JSON.stringify([g.unit, s.subunit])] });
+      }
+    }
+    const rows = tocRows.filter((r) => r.page != null || true);
+    for (let i = 0; i < expect.length && i < rows.length; i++) {
+      if (rows[i].page !== (expect[i].page ?? null)) {
+        tocMismatch.push({ i, label: rows[i].label, toc: rows[i].page, expected: expect[i].page ?? null });
+      }
+    }
+  }
+
+  const nonMonotonic = [];
+  {
+    let prev = 0;
+    let prevLabel = '(처음)';
+    for (const g of groups) {
+      const up = unitPage[g.unit];
+      if (up != null) {
+        if (up < prev) nonMonotonic.push({ kind: 'unit', label: g.unit, page: up, after: prevLabel, afterPage: prev });
+        prev = Math.max(prev, up);
+        prevLabel = g.unit;
+      }
+      const fp = firstPageOfEachUnit[g.unit];
+      if (up != null && fp != null && up > fp) nonMonotonic.push({ kind: 'unitAfterProblem', label: g.unit, page: up, firstProblem: fp });
+      for (const s2 of g.subunits || []) {
+        const k = JSON.stringify([g.unit, s2.subunit]);
+        const sp = subunitPage[k];
+        if (sp == null) continue;
+        if (sp < prev) nonMonotonic.push({ kind: 'subunit', label: `${g.unit} / ${s2.subunit}`, page: sp, after: prevLabel, afterPage: prev });
+        const sf = firstPageOfEachSubunit[k];
+        if (sf != null && sp > sf) nonMonotonic.push({ kind: 'subunitAfterProblem', label: `${g.unit} / ${s2.subunit}`, page: sp, firstProblem: sf });
+        prev = Math.max(prev, sp);
+        prevLabel = `${g.unit} / ${s2.subunit}`;
+      }
+    }
+  }
+
+  /* 셀 흐름(fillOrder) 검사 — 채우기 순서대로 칸을 훑었을 때 문항 번호가 되돌아가면 흐름이 깨진 것.
+     1×2·2×2에서 row 흐름(좌상→우상→좌하→우하)이 실제로 지켜지는지 여기서 드러난다. */
+  const nCols = Number(GRID[1]);
+  const nRows = Number(GRID[2]);
+  const order = project.layout.fillOrder && project.layout.fillOrder !== 'auto'
+    ? project.layout.fillOrder
+    : (nRows === 1 ? 'column' : 'row');
+  const seq = [];
+  if (order === 'column') {
+    for (let c = 0; c < nCols; c++) for (let r = 0; r < nRows; r++) seq.push(r * nCols + c);
+  } else {
+    for (let r = 0; r < nRows; r++) for (let c = 0; c < nCols; c++) seq.push(r * nCols + c);
+  }
+  /* 기준은 문항 **번호**가 아니라 groupByUnits가 정한 **차례**다. 단원별로 묶으면 번호가
+     43 → 95 → 43처럼 되돌아가는 것이 정상이므로, 번호로 재면 멀쩡한 배치를 결함이라 우긴다. */
+  const flowBreaks = [];
+  let flowCells = 0;
+  {
+    const rank = new Map();
+    let r = 0;
+    for (const g of groups) for (const s of g.subunits || []) for (const p of s.problems || []) rank.set(p.key, r++);
+    let prev = -1;
+    let prevWhere = '(처음)';
+    for (const pg of mount.querySelectorAll('.page[data-sheet="problems"]')) {
+      for (const ci of seq) {
+        const cell = pg.querySelector(`.cell[data-cell="${ci}"]`);
+        if (!cell) continue;
+        const art = cell.querySelector('.q:not(.cont)');
+        const key = art ? art.dataset.q : null;
+        if (!key || !rank.has(key)) continue;
+        flowCells++;
+        const i = rank.get(key);
+        const where = `p${pg.dataset.page}c${ci}`;
+        if (i < prev) {
+          flowBreaks.push({ where, key, rank: i, after: prevWhere, afterRank: prev });
+        }
+        prev = i;
+        prevWhere = where;
+      }
+    }
+  }
+
+  /* 쪽당 문항 수 — 시트의 마지막 쪽은 최소 조건에서 면제(자연히 짧다), 최대는 모든 쪽에 건다.
+     scale은 그 쪽이 실제로 쓴 글자 배율이고, DOM의 data-font-scale과 같아야 한다. */
+  const perPage = (built.stats && built.stats.perPage) || [];
+  const lastProblemPage = perPage.length ? perPage[perPage.length - 1].page : null;
+  const perPageViolations = perPage.filter((r) => {
+    if (r.min && r.page !== lastProblemPage && r.count < r.min) return true;
+    if (r.max && r.count > r.max) return true;
+    return false;
+  });
+  const scaledPages = [];
+  for (const p of mount.querySelectorAll('.page[data-font-scale]')) {
+    const s = Number(p.dataset.fontScale);
+    if (s !== 1) scaledPages.push({ page: Number(p.dataset.page) || null, scale: s, fontSize: p.style.getPropertyValue('--font-size') });
+  }
+
+  /* TEMP-DEBUG: 앞 세 쪽의 칸별 원자 차례(클래스 이름) */
+  const cellMap = [];
+  for (const pg of mount.querySelectorAll('.page[data-sheet="problems"]')) {
+    const no = Number(pg.dataset.page);
+    if (no > 3) break;
+    for (const cell of pg.querySelectorAll('.cell')) {
+      const kinds = [];
+      for (const art of cell.children) {
+        if (art.classList.contains('q')) {
+          for (const ch of art.children) kinds.push(`${art.dataset.q}:${ch.className.split(' ')[0]}`);
+        } else kinds.push(`-:${art.className.split(' ')[0]}`);
+      }
+      cellMap.push({ page: no, cell: cell.dataset.cell, kinds });
+    }
+  }
+
+  emit({
+    json: JSON_PATH,
+    grid: `${GRID[1]}x${GRID[2]}`,
+    exam: EXAM ? 1 : 0,
+    sheet: SHEET,
+    fillOrder: order,
+    rowRule: !!project.layout.rowRule,
+    rowRuleEls: mount.querySelectorAll('.row-rule').length,
+    colRuleEls: mount.querySelectorAll('.col-rule').length,
+    flowCells,
+    flowBreaks,
+    pages: built.stats ? built.stats.pages : built.pages.length,
+    domPages: built.pages.length,
+    problems: (doc.problems || []).length,
+    ms: msWall,                                    // 파싱+조판. 가상 시간이면 null(셸이 대신 잰다)
+    msParse: msParse,                              // 그중 parseProject까지
+    msBuild: msWall != null && msParse != null ? msWall - msParse : null,
+    clock: clockKind,                              // worker | frozen(virtual-time) | none
+    msLayout: built.stats ? built.stats.ms : null, // buildBooklet 자체(창 시계 — 가상 시간이면 못 믿는다)
+    msVirtual: Math.round(t1 - t0),                // 창 시계 총합. 가상 시간이 섞이므로 참고만
+    atoms: built.stats ? built.stats.atoms : null,
+    passes: built.stats ? built.stats.passes : null,
+    measures: built.stats ? built.stats.measures : null,
+    converged: built.stats ? built.stats.converged : null,
+    overflow: built.stats ? built.stats.overflow : null,
+    clipped: built.stats ? built.stats.clipped : null,
+    repairs: built.stats ? built.stats.repairs : null,
+    bandOrphans: built.stats ? built.stats.bandOrphans : null,
+    keepOrphans: built.stats ? built.stats.keepOrphans : null,
+    passageOrphans: built.stats ? built.stats.passageOrphans : null,
+    passageSites: built.stats ? built.stats.passageSites : null,
+    cellMap,
+    trace: (window.__TRACEOUT || []).slice(0, 30),
+    fontAdjusted: built.stats ? built.stats.fontAdjusted : null,
+    shrunkForKeep: built.stats ? built.stats.shrunkForKeep : null,
+    rewinds: built.stats ? built.stats.rewinds : null,
+    perPageLimits: { min: PPMIN, max: PPMAX, rules: PPRULES, band: BAND, pass: PASS, shrink: SHRINK },
+    perPageViolations,
+    perPage,
+    scaledPages,
+    index: {
+      problemPage,
+      unitPage,
+      subunitPage,
+      answersPage: built.index.answersPage,
+      explanationsPage: built.index.explanationsPage,
+      tocPages: built.index.tocPages,
+    },
+    firstPageOfEachUnit,
+    firstPageOfEachSubunit,
+    mismatch,
+    tocMismatch,
+    tocClipped,
+    nonMonotonic,
+    tocRows,
+    warningCount: (built.warnings || []).length,
+    warnings: (built.warnings || []).slice(0, 40),
+  });
+
+  if (ZOOM) mount.style.setProperty('--zoom', String(ZOOM));
+  if (ONLY != null) {
+    for (const p of mount.querySelectorAll('.page')) {
+      if (Number(p.dataset.index) !== ONLY) p.style.display = 'none';
+    }
+    report.style.display = 'none';
+    document.getElementById('bar').style.display = 'none';
+  }
+} catch (err) {
+  if (!(err && err.__stop)) emit({ error: String((err && err.stack) || err) });
+}
+</script>
+</body>
+</html>

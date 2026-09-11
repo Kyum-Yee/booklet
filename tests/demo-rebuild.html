@@ -1,0 +1,46 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>demo-rebuild — 같은 mount에서 용지를 바꿔 두 번 조판</title>
+<link rel="stylesheet" href="../styles/page.css">
+<link rel="stylesheet" href="../styles/ui.css">
+<link rel="stylesheet" href="../vendor/katex/katex.min.css">
+<script src="../vendor/katex/katex.min.js"></script>
+<div class="app"><div class="main"><div id="preview" class="preview"></div></div></div>
+<pre id="report">{"state":"loading"}</pre>
+<script type="module">
+import { parseProject } from '../src/parser.js';
+import { renderProblem, renderExplanation, renderAnswerTable } from '../src/render.js';
+import { groupByUnits } from '../src/units.js';
+import { asciiToSvg } from '../src/ascii2svg.js';
+import { buildBooklet } from '../src/layout.js';
+const q = new URLSearchParams(location.search);
+const seq = (q.get('pages') || 'A4,B5,A4').split(',');
+const json = q.get('json') || 'fixtures/project_kor.json';
+const project = await (await fetch(json)).json();
+// &layout={"font":{"size":7},"keep":{"allowPassageSplit":false}} 처럼 설정 일부를 덮어쓴다
+const patch = q.get('layout') ? JSON.parse(q.get('layout')) : null;
+const merge = (a, b) => { for (const k of Object.keys(b)) { if (b[k] && typeof b[k] === 'object' && !Array.isArray(b[k])) { a[k] = a[k] || {}; merge(a[k], b[k]); } else a[k] = b[k]; } return a; };
+if (patch) merge(project.layout, patch);
+if (q.get('grid')) { const [c, r] = q.get('grid').split('x').map(Number); project.layout.grid = { cols: c, rows: r }; }
+const mount = document.getElementById('preview');
+const out = [];
+for (const page of seq) {
+  project.layout.page = page;
+  const doc = parseProject(project);
+  doc.renderers = { renderProblem, renderExplanation, renderAnswerTable, groupByUnits, asciiToSvg };
+  doc.ctx = { settings: project.layout, rules: [], images: [], imagePlacements: [], figureMode: () => 'svg' };
+  const res = await buildBooklet(doc, project, mount);
+  // 실제 칸 넘침을 독립적으로 다시 센다(레이아웃의 자체 검증과 별개)
+  let clipped = 0;
+  for (const cell of mount.querySelectorAll('.cell')) {
+    const zoom = cell.getBoundingClientRect().width / (cell.offsetWidth || 1);
+    const top = cell.getBoundingClientRect().top;
+    let bottom = top;
+    for (const ch of cell.children) { const r = ch.getBoundingClientRect(); if (r.height && r.bottom > bottom) bottom = r.bottom; }
+    if ((bottom - top) / zoom - cell.clientHeight > 1) clipped++;
+  }
+  const first = mount.querySelector('.page');
+  out.push({ page, pages: res.stats.pages, clipped, selfClipped: res.stats.clipped, repairs: res.stats.repairs, pageW: first && first.getBoundingClientRect().width, cellH: first && first.querySelector('.cell').clientHeight });
+}
+document.getElementById('report').textContent = JSON.stringify(out, null, 1);
+</script>

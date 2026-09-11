@@ -1,0 +1,23 @@
+<!doctype html><meta charset="utf-8"><title>demo-folder — 폴더 선택(하위 폴더 포함)을 store.addSources로 재현</title>
+<pre id="report">{"state":"loading"}</pre>
+<script type="module">
+const out = { steps: [] };
+try {
+  const { createStore } = await import('../src/store.js');
+  const list = await (await fetch('fixtures/folder_list.json')).json();
+  out.steps.push('list ' + list.length);
+  // 내용은 픽스처 하나로 대신하고(경로 논리만 검증), 경로는 실제 run 폴더 구조 그대로.
+  const txt = await (await fetch('fixtures/kor_grammar.md')).text();
+  const files = list.map((rel) => { const f = new File([txt], rel.split('/').pop()); f._path = rel; return f; });
+  out.steps.push('files ' + files.length);
+  const store = createStore();
+  const t0 = performance.now();
+  const res = await store.addSources(files, { preferOriginal: true });
+  out.ms = Math.round(performance.now() - t0);
+  out.res = res;
+  out.sources = store.get().sources.length;
+  out.enabled = store.get().sources.filter((s) => s.enabled).length;
+  out.warnings = store.getWarnings().slice(0, 5);
+} catch (e) { out.error = String(e && e.stack || e); }
+document.getElementById('report').textContent = JSON.stringify(out, null, 1);
+</script>

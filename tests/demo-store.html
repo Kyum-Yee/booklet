@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8"><title>demo-store — File 객체로 addSources 경로 점검</title>
+<pre id="report">{"state":"loading"}</pre>
+<script type="module">
+import { createStore } from '../src/store.js';
+const out = { steps: [] };
+try {
+  const store = createStore();
+  out.steps.push('createStore ok');
+  const txt = await (await fetch('fixtures/chem_batch9.md')).text();
+  const f1 = new File([txt], 'batch-9_원본.md', { type: 'text/markdown' });
+  const f2 = new File([txt], 'batch-9_view.md', { type: 'text/markdown' });
+  const f3 = new File(['x'], 'note.pdf');
+  out.steps.push('files ok');
+  const t0 = performance.now();
+  const res = await Promise.race([
+    store.addSources([f1, f2, f3], { preferOriginal: true }),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('addSources timeout 5s')), 5000)),
+  ]);
+  out.res = res; out.ms = Math.round(performance.now() - t0);
+  out.sources = store.get().sources.map((s) => ({ name: s.name, enabled: s.enabled, len: s.text.length, profileId: s.profileId }));
+  out.warnings = store.getWarnings ? store.getWarnings() : null;
+} catch (e) { out.error = String(e && e.stack || e); }
+document.getElementById('report').textContent = JSON.stringify(out, null, 1);
+</script>

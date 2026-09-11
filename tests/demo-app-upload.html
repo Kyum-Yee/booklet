@@ -1,0 +1,40 @@
+<!doctype html><meta charset="utf-8"><title>demo-app-upload — 실제 앱에 파일 선택 이벤트를 흘려 넣기</title>
+<iframe id="app" style="width:1300px;height:900px;border:0"></iframe>
+<pre id="report">{"state":"loading"}</pre>
+<script type="module">
+const out = { errors: [], steps: [] };
+const frame = document.getElementById('app');
+const qs = new URLSearchParams(location.search);
+frame.src = qs.get('app') || '../index.html';
+await new Promise((r) => frame.addEventListener('load', r, { once: true }));
+const w = frame.contentWindow, d = frame.contentDocument;
+w.addEventListener('error', (e) => out.errors.push('error: ' + (e.message || e)));
+w.addEventListener('unhandledrejection', (e) => out.errors.push('rejection: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)));
+if (!qs.get('keep')) { try { w.localStorage.clear(); } catch {} }
+await new Promise((r) => setTimeout(r, 1500));
+out.steps.push('app loaded, sources=' + (d.querySelectorAll('#file-list tbody tr').length));
+// &set=junk : 받지 않는 형식 + 프로젝트 아닌 .json → 토스트가 이유를 말해야 한다.
+// &set=empty: 파일 0개의 change → "선택된 파일이 없습니다".
+const set = qs.get('set') || 'ok';
+const names = set === 'ok' ? ['chem_batch9.md', 'chem_batch3.md', 'kor_grammar.md'] : [];
+const dt = new DataTransfer();
+for (const n of names) {
+  const txt = await (await fetch('fixtures/' + n)).text();
+  dt.items.add(new File([txt], n, { type: 'text/markdown' }));
+}
+if (set === 'junk') {
+  dt.items.add(new File(['{"theme":"dark"}'], 'settings.json', { type: 'application/json' }));
+  dt.items.add(new File(['%PDF-1.4'], '문서.pdf', { type: 'application/pdf' }));
+}
+const input = d.getElementById('in-files');
+input.files = dt.files;
+out.steps.push('files set: ' + input.files.length);
+input.dispatchEvent(new Event('change', { bubbles: true }));
+await new Promise((r) => setTimeout(r, Number(qs.get('wait') || 8000)));
+out.fileRows = d.querySelectorAll('#file-list tbody tr').length;
+out.status = d.querySelector('.statusbar') ? d.querySelector('.statusbar').textContent.replace(/\s+/g, ' ').trim().slice(0, 120) : null;
+out.pages = d.querySelectorAll('#preview .page').length;
+out.toast = d.querySelector('.toast') ? d.querySelector('.toast').textContent : null;
+out.warnings = [...d.querySelectorAll('#warnings li')].map((li) => li.textContent.slice(0, 100));
+document.getElementById('report').textContent = JSON.stringify(out, null, 1);
+</script>

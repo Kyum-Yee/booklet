@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>booklet — layout 단독 데모(mock-doc)</title>
+<link rel="stylesheet" href="../styles/page.css">
+<style>
+  /* 데모 껍데기. 조판 결과의 생김새는 전부 page.css가 정한다. */
+  body { margin: 0; font: 13px/1.5 -apple-system, "Apple SD Gothic Neo", sans-serif; background: #e9e9ee; }
+  #bar {
+    position: sticky; top: 0; z-index: 9; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    padding: 6px 10px; background: #22252b; color: #eee; font-size: 12px;
+  }
+  #bar button { background: #3a3f48; color: #eee; border: 1px solid #555; border-radius: 3px; padding: 2px 8px; cursor: pointer; }
+  #bar button.on { background: #f0f0f0; color: #111; }
+  #bar .sp { flex: 1 1 auto; }
+  #bar code { color: #8fd; }
+  #report {
+    margin: 0; padding: 8px 10px; background: #14161a; color: #cfe; font: 11px/1.45 ui-monospace, Menlo, monospace;
+    white-space: pre-wrap; word-break: break-all; max-height: 30vh; overflow: auto;
+  }
+  @media print { #bar, #report { display: none !important; } body { background: #fff; } }
+</style>
+</head>
+<body>
+<div id="bar">
+  <span>격자</span>
+  <button data-grid="1x1">1×1</button>
+  <button data-grid="2x1">2×1</button>
+  <button data-grid="1x2">1×2</button>
+  <button data-grid="2x2">2×2</button>
+  <span>·</span>
+  <button id="btn-exam">수능식</button>
+  <button id="btn-rowrule">가로 괘선</button>
+  <button id="btn-plain">지문 테두리 없음</button>
+  <span class="sp"></span>
+  <code id="what">…</code>
+</div>
+<pre id="report">{"state":"loading"}</pre>
+<div id="preview"></div>
+
+<script>
+/* KaTeX는 모듈보다 먼저 전역으로. vendor/ 우선, 없으면 CDN. */
+(function () {
+  const css = document.createElement('link');
+  css.rel = 'stylesheet';
+  css.href = '../vendor/katex/katex.min.css';
+  css.onerror = () => { css.href = 'https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.css'; };
+  document.head.appendChild(css);
+  window.__katexReady = new Promise((resolve) => {
+    const s = document.createElement('script');
+    s.src = '../vendor/katex/katex.min.js';
+    s.onload = () => resolve('local');
+    s.onerror = () => {
+      const t = document.createElement('script');
+      t.src = 'https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.js';
+      t.onload = () => resolve('cdn');
+      t.onerror = () => resolve('none');
+      document.head.appendChild(t);
+    };
+    document.head.appendChild(s);
+  });
+})();
+</script>
+
+<script type="module">
+/* 파서·렌더 없이 layout.js만 돌린다 — mock-doc.mjs가 Problem·Atom 계약대로 가짜 문서를 만든다. */
+import { makeDoc, makeProject } from './mock-doc.mjs';
+import { buildBooklet } from '../src/layout.js';
+
+const Q = new URLSearchParams(location.search);
+const GRID = /^(\d)x(\d)$/.exec(Q.get('grid') || '2x1') || [null, '2', '1'];
+const EXAM = Q.get('exam') === '1';
+const ROWRULE = Q.get('rowrule') === '1';
+const PLAIN = Q.get('passage') === 'plain';
+const ONLY = Q.get('only') ? Number(Q.get('only')) : null;
+
+document.getElementById('what').textContent =
+  `mock-doc · ${GRID[1]}×${GRID[2]} · exam=${EXAM ? 1 : 0} · rowRule=${ROWRULE ? 1 : 0} · passage=${PLAIN ? 'plain' : 'boxed'}`;
+
+/** 매개변수를 바꿔 같은 페이지를 다시 연다. */
+function go(patch) {
+  const q = new URLSearchParams(location.search);
+  for (const k of Object.keys(patch)) q.set(k, patch[k]);
+  location.search = q.toString();
+}
+for (const b of document.querySelectorAll('#bar [data-grid]')) {
+  b.classList.toggle('on', b.dataset.grid === `${GRID[1]}x${GRID[2]}`);
+  b.onclick = () => go({ grid: b.dataset.grid });
+}
+const on = (id, flag, patch) => {
+  const el = document.getElementById(id);
+  el.classList.toggle('on', flag);
+  el.onclick = () => go(patch);
+};
+on('btn-exam', EXAM, { exam: EXAM ? '0' : '1' });
+on('btn-rowrule', ROWRULE, { rowrule: ROWRULE ? '0' : '1' });
+on('btn-plain', PLAIN, { passage: PLAIN ? 'boxed' : 'plain' });
+
+const report = document.getElementById('report');
+/** 리포트를 JSON 한 덩어리로(chrome.sh report 모드가 이 텍스트만 긁어 간다). */
+function emit(obj) {
+  report.textContent = JSON.stringify({ ...obj, __done: 1 }, null, 1);
+}
+/** Map을 평면 객체로. */
+function plain(m) {
+  return m && typeof m.entries === 'function' ? Object.fromEntries([...m.entries()]) : { ...(m || {}) };
+}
+
+try {
+  await window.__katexReady;
+  const doc = makeDoc();
+  const project = makeProject({
+    layout: {
+      grid: { cols: Number(GRID[1]), rows: Number(GRID[2]) },
+      examStyle: EXAM,
+      rowRule: ROWRULE,
+      passageStyle: PLAIN ? 'plain' : 'boxed',
+    },
+  });
+
+  const mount = document.getElementById('preview');
+  const built = await buildBooklet(doc, project, mount);
+
+  const tocRows = [];
+  for (const nav of mount.querySelectorAll('.page[data-sheet="toc"] .toc')) {
+    for (const row of nav.querySelectorAll('.toc-row')) {
+      const n = parseInt(((row.querySelector('.toc-page') || {}).textContent || '').replace(/[^\d]/g, ''), 10);
+      tocRows.push({
+        level: row.classList.contains('toc-l1') ? 1 : 2,
+        label: (row.querySelector('.toc-label') || {}).textContent || '',
+        page: Number.isFinite(n) ? n : null,
+      });
+    }
+  }
+
+  emit({
+    grid: `${GRID[1]}x${GRID[2]}`,
+    exam: EXAM ? 1 : 0,
+    rowRule: ROWRULE ? 1 : 0,
+    pages: built.stats ? built.stats.pages : built.pages.length,
+    domPages: built.pages.length,
+    problems: doc.problems.length,
+    overflow: built.stats ? built.stats.overflow : null,
+    index: {
+      unitPage: plain(built.index.unitPage),
+      subunitPage: plain(built.index.subunitPage),
+      answersPage: built.index.answersPage,
+      explanationsPage: built.index.explanationsPage,
+      tocPages: built.index.tocPages,
+    },
+    tocRows,
+    warningCount: (built.warnings || []).length,
+    warnings: (built.warnings || []).slice(0, 20),
+  });
+
+  if (ONLY != null) {
+    for (const p of mount.querySelectorAll('.page')) {
+      if (Number(p.dataset.index) !== ONLY) p.style.display = 'none';
+    }
+    report.style.display = 'none';
+    document.getElementById('bar').style.display = 'none';
+  }
+} catch (err) {
+  emit({ error: String((err && err.stack) || err) });
+}
+</script>
+</body>
+</html>
