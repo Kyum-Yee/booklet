@@ -103,19 +103,24 @@ export function assignUnits(problems, project = {}) {
   const cfg = project.units || {};
   const map = cfg.map || {};
   const sources = new Map((project.sources || []).map((s) => [s.id, s]));
+  const hiddenUnits = new Set(Array.isArray(cfg.hiddenUnits) ? cfg.hiddenUnits : []);
+  const hiddenSubunits = cfg.hiddenSubunits || {};
   for (const p of problems) {
     const manual = mappedUnits(map, p.key);
     if (manual && (manual.unit || manual.subunit)) {
       p.unit = manual.unit || '';
       p.subunit = manual.subunit || '';
       p.unitFrom = 'map';
-      continue;
+    } else {
+      const source = sources.get(p.sourceId) || null;
+      const derived = deriveUnits(p, source, p.header);
+      p.unit = derived.unit;
+      p.subunit = derived.subunit;
+      p.unitFrom = derived.from;
     }
-    const source = sources.get(p.sourceId) || null;
-    const derived = deriveUnits(p, source, p.header);
-    p.unit = derived.unit;
-    p.subunit = derived.subunit;
-    p.unitFrom = derived.from;
+    if (hiddenUnits.has(p.unit) || (hiddenSubunits[p.unit] && hiddenSubunits[p.unit].includes(p.subunit))) {
+      p.excluded = true;
+    }
   }
 }
 

@@ -203,7 +203,7 @@ test("기본 프로젝트가 §2.1의 키를 전부 갖는다", () => {
   assert.equal(p.version, 1);
   for (const k of ["subject", "grade", "institute", "date", "round", "period"]) assert.ok(k in p.meta, `meta.${k}`);
   for (const k of ["mode", "start", "pad"]) assert.ok(k in p.numbering, `numbering.${k}`);
-  for (const k of ["source", "order", "suborder", "map"]) assert.ok(k in p.units, `units.${k}`);
+  for (const k of ["source", "order", "suborder", "map", "hiddenUnits", "hiddenSubunits"]) assert.ok(k in p.units, `units.${k}`);
   for (const k of ["cover", "problems", "answers", "explanations", "toc"]) assert.ok(k in p.sheets, `sheets.${k}`);
   assert.deepEqual(Object.keys(p.sheets.answers).sort(), ["enabled", "perRow", "title"]);
   assert.deepEqual(p.sheets.toc, { enabled: true, front: true, perUnit: true, pageNumbers: true, title: "차례" });

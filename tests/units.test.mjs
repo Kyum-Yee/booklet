@@ -131,7 +131,7 @@ test('assignUnits — 픽스처의 헤더·ref로 단원이 채워진다', () =>
   const project = {
     sources: [
       { id: 's1', name: 'kor_grammar.md', profileId: 'batch', order: 0, enabled: true },
-      { id: 's2', name: 'kor_mdheading.md', profileId: 'mdheading', order: 1, enabled: true },
+      { id: 's2', name: 'chem_batch3.md', profileId: 'batch', order: 1, enabled: true },
     ],
     units: {},
   };
@@ -146,9 +146,9 @@ test('assignUnits — 픽스처의 헤더·ref로 단원이 채워진다', () =>
   assert.deepEqual(kor.map((p) => p.unit), ['문법 심화', '문법 심화', '문법 심화']);
   assert.equal(kor[0].unitFrom, 'ref');
 
-  const mdh = problems.filter((p) => p.sourceId === 's2');
-  assert.deepEqual(mdh.map((p) => p.unit), Array(3).fill('국어 문법 심화'));
-  assert.equal(mdh[0].unitFrom, 'header');
+  const chem = problems.filter((p) => p.sourceId === 's2');
+  assert.deepEqual(chem.map((p) => p.unit), Array(4).fill('Ⅰ-1. 기체의 성질'));
+  assert.equal(chem[0].unitFrom, 'header');
 });
 
 /* ── groupByUnits ───────────────────────────────── */
@@ -182,4 +182,36 @@ test('groupByUnits — 제외된 문항은 빼고, 단원 없는 문항은 "" �
   const groups = groupByUnits(problems, {});
   assert.deepEqual(groups.map((g) => g.unit), ['', 'Ⅰ']);
   assert.deepEqual(groups[0].subunits[0].problems.map((p) => p.key), ['a']);
+});
+
+test('assignUnits — hiddenUnits 또는 hiddenSubunits에 지정된 단원은 문항이 제외(excluded=true)된다', () => {
+  const problems = [
+    { key: 'p1', unit: 'Ⅰ. 기체', subunit: '성질' },
+    { key: 'p2', unit: 'Ⅰ. 기체', subunit: '분압' },
+    { key: 'p3', unit: 'Ⅱ. 용액', subunit: '농도' },
+    { key: 'p4', unit: 'Ⅱ. 용액', subunit: '총괄성' },
+  ];
+  const project = {
+    units: {
+      hiddenUnits: ['Ⅰ. 기체'],
+      hiddenSubunits: { 'Ⅱ. 용액': ['총괄성'] },
+      map: {
+        p1: { unit: 'Ⅰ. 기체', subunit: '성질' },
+        p2: { unit: 'Ⅰ. 기체', subunit: '분압' },
+        p3: { unit: 'Ⅱ. 용액', subunit: '농도' },
+        p4: { unit: 'Ⅱ. 용액', subunit: '총괄성' },
+      },
+    },
+  };
+  assignUnits(problems, project);
+  assert.equal(problems[0].excluded, true, 'hiddenUnits에 속한 대단원 문항 p1 제외');
+  assert.equal(problems[1].excluded, true, 'hiddenUnits에 속한 대단원 문항 p2 제외');
+  assert.equal(problems[2].excluded, undefined, '보이는 소단원 문항 p3은 활성 상태');
+  assert.equal(problems[3].excluded, true, 'hiddenSubunits에 속한 소단원 문항 p4 제외');
+
+  const groups = groupByUnits(problems, project.units);
+  // Ⅰ. 기체는 전체 제외되어 groups에 나타나지 않아야 함.
+  assert.deepEqual(groups.map((g) => g.unit), ['Ⅱ. 용액']);
+  assert.deepEqual(groups[0].subunits.map((s) => s.subunit), ['농도']);
+  assert.deepEqual(groups[0].subunits[0].problems.map((p) => p.key), ['p3']);
 });

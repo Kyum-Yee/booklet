@@ -661,7 +661,7 @@ function buildStream(doc, project, ctx) {
   );
   const warnings = ctx.warnings;
   const overrides = project.overrides || {};
-  const problems = (doc.problems || []).filter((p) => !(overrides[p.key] && overrides[p.key].exclude));
+  const problems = (doc.problems || []).filter((p) => !p.excluded && !(overrides[p.key] && overrides[p.key].exclude));
   const groups =
     typeof R.groupByUnits === 'function'
       ? R.groupByUnits(problems, project.units || {})

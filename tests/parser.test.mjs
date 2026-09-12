@@ -39,12 +39,20 @@ const EXPECTED = [
   { file: 'kor_grammar_view.md', count: 3, profile: 'batch', warnings: 0 },
   { file: 'kor_reading_set.md', count: 5, profile: 'batch', warnings: 1, allow: '문항 내용이 없는 블록을 건너뜁니다' },
   { file: 'kor_lit.md', count: 75, profile: 'batch', warnings: 0 },
+  { file: 'eng_batch.md', count: 3, profile: 'batch', warnings: 0 },
+  { file: 'eng_insert.md', count: 3, profile: 'batch', warnings: 0 },
+  { file: 'math_batch.md', count: 4, profile: 'batch', warnings: 0 },
+  { file: 'math_merged.md', count: 28, profile: 'batch', warnings: 0 },
+  { file: 'chem_batch3.md', count: 4, profile: 'batch', warnings: 0 },
+  { file: 'chem_batch9.md', count: 4, profile: 'batch', warnings: 0 },
+  { file: 'chem_batch12.md', count: 4, profile: 'batch', warnings: 0 },
+  { file: 'chem_batch15.md', count: 4, profile: 'batch', warnings: 0 },
   { file: 'kor_mdheading.md', count: 3, profile: 'mdheading', warnings: 0 },
   { file: 'kor_mdheading2.md', count: 3, profile: 'mdheading', warnings: 0 },
 ];
 
-test('픽스처 6개의 문항 수·감지된 프로파일·허용 경고', () => {
-  assert.equal(EXPECTED.length, 6);
+test('픽스처 14개의 문항 수·감지된 프로파일·허용 경고', () => {
+  assert.equal(EXPECTED.length, 14);
   for (const spec of EXPECTED) {
     const res = read(spec.file);
     assert.equal(res.problems.length, spec.count, `${spec.file} 문항 수`);
@@ -60,6 +68,8 @@ test('픽스처 6개의 문항 수·감지된 프로파일·허용 경고', () =
 
 test('과목은 소스 전체에서 한 번 추정된다', () => {
   assert.equal(read('kor_lit.md').problems[0].subject, '국어');
+  assert.equal(read('eng_batch.md').problems[0].subject, '영어');
+  assert.equal(read('chem_batch9.md').problems[0].subject, '화학');
   assert.equal(read('kor_mdheading.md').problems[0].subject, '국어');
   assert.equal(read('kor_lit.md', { subject: '수학' }).problems[0].subject, '수학');
 });
@@ -99,17 +109,19 @@ test('정답 값과 다중 여부', () => {
   assert.deepEqual(grammar.map((p) => p.answer.values), [[2], [1], [1, 2, 3, 4]]);
   assert.deepEqual(grammar.map((p) => p.answer.multi), [false, false, true]);
 
+  const eng = read('eng_batch.md').problems;
+  assert.deepEqual(eng.map((p) => p.answer.values), [[4], [2, 3, 4], [1]]);
+  assert.equal(eng[1].answer.multi, true);
+  assert.deepEqual(eng.map((p) => p.srcNum), ['01', '02', '03']);
+
   // _view 파일은 해설·정답이 없다 — 경고 없이 정답만 비어 있어야 한다.
   for (const p of read('kor_grammar_view.md').problems) assert.equal(p.answer, null);
 });
 
 /* ── 4. 선지 ─────────────────────────────────────── */
 
-test('인라인 선지 5개는 라벨만 갖는다', () => {
-  const p = parseSource({
-    id: 's1', name: 'inline.md', profileId: 'batch',
-    text: '---\n[문제]\n1 (2분)\n문맥상 알맞은 자리를 고르시오.\n    [삽입 문장]\n① ② ③ ④ ⑤\n[해설]\n[정답] 1',
-  }, null, {}).problems[0];
+test('eng_insert — 인라인 선지 5개는 라벨만 갖는다', () => {
+  const p = read('eng_insert.md').problems[0];
   assert.equal(p.choiceLayout, 'inline');
   assert.equal(p.choices.length, 5);
   assert.deepEqual(p.choices.map((c) => c.label), ['①', '②', '③', '④', '⑤']);
@@ -165,6 +177,34 @@ test('plain 프로파일 — [지문]…[/지문]과 "답 ③"', () => {
 
 /* ── 5. 표·도형 ──────────────────────────────────── */
 
+test('chem 픽스처의 표 행·열 수와 도형 수·위치', () => {
+  const b12 = read('chem_batch12.md').problems;
+  assert.deepEqual(b12.map((p) => p.figures.length), [1, 1, 0, 0]);
+  assert.deepEqual(b12.map((p) => p.figures.map((f) => f.where)), [['stem'], ['stem'], [], []]);
+
+  const t0 = collect(b12[0].stem, (b) => b.type === 'table')[0];
+  assert.equal(t0.header.length, 6);
+  assert.equal(t0.rows.length, 3);
+  assert.equal(t0.rows[0].length, 6);
+  assert.equal(t0.header[0], '용액');
+
+  const t2 = collect(b12[2].stem, (b) => b.type === 'table')[0];
+  assert.equal(t2.header.length, 5);
+  assert.equal(t2.rows.length, 2);
+
+  const b15 = read('chem_batch15.md').problems;
+  assert.deepEqual(b15.map((p) => p.figures.length), [1, 1, 0, 1]);
+  const t15 = collect(b15[2].stem, (b) => b.type === 'table')[0];
+  assert.equal(t15.header.length, 4);
+  assert.equal(t15.rows.length, 3);
+
+  for (const name of ['chem_batch3.md', 'chem_batch9.md']) {
+    const problems = read(name).problems;
+    assert.deepEqual(problems.map((p) => p.figures.length), [1, 1, 1, 1], name);
+    for (const p of problems) assert.equal(p.figures[0].idx, 0);
+  }
+});
+
 test('kor_grammar 2번 — <표> 박스 안 파이프 표', () => {
   const p = read('kor_grammar.md').problems[1];
   const table = collect(p.stem, (b) => b.type === 'table')[0];
@@ -192,7 +232,7 @@ test('자동 감지는 mdheading 픽스처에서 mdheading을 고른다', () => 
 });
 
 test('batch 픽스처는 자동 감지에서도 batch를 지킨다', () => {
-  for (const name of ['kor_grammar.md', 'kor_grammar_view.md', 'kor_reading_set.md', 'kor_lit.md']) {
+  for (const name of ['kor_grammar.md', 'eng_insert.md', 'math_batch.md', 'chem_batch3.md']) {
     assert.equal(read(name).profileId, 'batch', name);
   }
 });
@@ -420,4 +460,18 @@ test('parseProject — 번호는 단원 그룹 순서(조판 순서)를 따라 �
     const inside = units.slice(firstIdx.get(u), lastIdx.get(u) + 1);
     assert.ok(inside.every((x) => x === u), `단원 "${u}"의 문항이 흩어져 있다`);
   }
+});
+
+test('parseProject — hiddenUnits에 속한 문항은 제외되고 활성 문항만 1번부터 번호가 매겨진다', () => {
+  const project = {
+    sources: [{ id: 's1', name: 'kor_mdheading.md', text: text('kor_mdheading.md'), profileId: 'auto', order: 0, enabled: true }],
+    numbering: { mode: 'sequential', start: 1, pad: 0 },
+    units: {
+      hiddenUnits: ['국어 문법 심화'],
+    },
+  };
+  const doc = parseProject(project);
+  assert.equal(doc.problems.length, 3);
+  assert.ok(doc.problems.every((p) => p.excluded === true));
+  assert.ok(doc.problems.every((p) => p.num === null && p.numText === ''));
 });

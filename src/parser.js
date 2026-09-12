@@ -983,7 +983,12 @@ export function parseProject(project) {
   // 번호는 조판 순서(단원 → 소단원 → 등장 순)를 따라야 본문·정답·차례가 맞는다.
   const groups = groupByUnits(problems, proj.units || {});
   const ordered = groups.flatMap((g) => g.subunits.flatMap((s) => s.problems));
-  if (ordered.length === problems.length) problems.splice(0, problems.length, ...ordered);
+  const excluded = problems.filter((p) => p.excluded);
+  for (const p of excluded) {
+    p.num = null;
+    p.numText = '';
+  }
+  problems.splice(0, problems.length, ...ordered, ...excluded);
   assignNumbers(problems, proj.numbering || { mode: 'sequential', start: 1, pad: 0 }, groups);
   groupRanges(problems);
 

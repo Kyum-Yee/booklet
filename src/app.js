@@ -676,7 +676,7 @@ function refreshUnitTable() {
   for (const p of problems) {
     const ov = project.overrides[p.key] || {};
     const mapped = project.units.map[p.key] || project.units.map[`${p.sourceId}#*`] || {};
-    const tr = el("tr", { "data-q": p.key });
+    const tr = el("tr", { "data-q": p.key, class: p.excluded ? "is-excluded" : "" });
     tr.append(el("td", { class: "num", text: p.num == null ? "—" : String(p.num) }));
     tr.append(el("td", { class: "muted", text: p.srcNum || "—" }));
     // 제목은 원문에 있을 때만 나온다(레이아웃에 실릴지는 배치 탭의 "문항 제목 표시"가 정한다).
@@ -708,11 +708,39 @@ function refreshUnitTable() {
   tb.append(frag);
 }
 
+const EYE_OPEN_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_CLOSED_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+
+/** 대단원 숨김/보임 토글 */
+function toggleUnitHidden(u) {
+  store.update((pr) => {
+    if (!Array.isArray(pr.units.hiddenUnits)) pr.units.hiddenUnits = [];
+    const idx = pr.units.hiddenUnits.indexOf(u);
+    if (idx >= 0) pr.units.hiddenUnits.splice(idx, 1);
+    else pr.units.hiddenUnits.push(u);
+  }, "toggle-unit-hidden");
+  refreshUnitOrder();
+}
+
+/** 소단원 숨김/보임 토글 */
+function toggleSubunitHidden(unit, s) {
+  store.update((pr) => {
+    if (!pr.units.hiddenSubunits || typeof pr.units.hiddenSubunits !== "object") pr.units.hiddenSubunits = {};
+    if (!Array.isArray(pr.units.hiddenSubunits[unit])) pr.units.hiddenSubunits[unit] = [];
+    const list = pr.units.hiddenSubunits[unit];
+    const idx = list.indexOf(s);
+    if (idx >= 0) list.splice(idx, 1);
+    else list.push(s);
+  }, "toggle-subunit-hidden");
+  refreshUnitOrder();
+}
+
 /** 대단원 순서 목록과 선택된 대단원의 소단원 순서를 다시 그린다. */
 function refreshUnitOrder() {
   const panel = $("#panel-units");
   if (panel.hidden) return;
   const project = store.get();
+  const hiddenUnits = project.units.hiddenUnits || [];
   const seen = [];
   for (const p of (doc && doc.problems) || []) {
     const u = p.unit || "";
@@ -723,7 +751,15 @@ function refreshUnitOrder() {
   const ol = $("#unit-order");
   ol.textContent = "";
   order.forEach((u, i) => {
-    const li = el("li", { class: "ord-item" + (u === selectedUnit ? " is-on" : "") }, [
+    const isHidden = hiddenUnits.includes(u);
+    const li = el("li", { class: "ord-item" + (u === selectedUnit ? " is-on" : "") + (isHidden ? " is-hidden" : "") }, [
+      el("button", {
+        type: "button",
+        class: "ord-eye" + (isHidden ? " is-hidden" : ""),
+        title: isHidden ? "대단원 보이기 (조판에 포함)" : "대단원 숨기기 (조판에서 제외)",
+        html: isHidden ? EYE_CLOSED_SVG : EYE_OPEN_SVG,
+        onclick: (e) => { e.stopPropagation(); toggleUnitHidden(u); },
+      }),
       el("button", { type: "button", class: "ord-name", text: u || "(단원 없음)", onclick: () => { selectedUnit = u; refreshUnitOrder(); } }),
       el("button", { type: "button", class: "mini", text: "↑", disabled: i === 0, onclick: () => moveInOrder("units.order", order, i, -1) }),
       el("button", { type: "button", class: "mini", text: "↓", disabled: i === order.length - 1, onclick: () => moveInOrder("units.order", order, i, 1) }),
@@ -739,6 +775,7 @@ function refreshUnitOrder() {
     return;
   }
   $("#subunit-order-note").textContent = `“${selectedUnit || "(단원 없음)"}”의 소단원 순서`;
+  const isParentHidden = hiddenUnits.includes(selectedUnit);
   const subsSeen = [];
   for (const p of (doc && doc.problems) || []) {
     if ((p.unit || "") !== selectedUnit) continue;
@@ -747,8 +784,24 @@ function refreshUnitOrder() {
   }
   const savedSub = (project.units.suborder && project.units.suborder[selectedUnit]) || [];
   const subOrder = savedSub.filter((s) => subsSeen.includes(s)).concat(subsSeen.filter((s) => !savedSub.includes(s)));
+  const hiddenSubs = (project.units.hiddenSubunits && project.units.hiddenSubunits[selectedUnit]) || [];
   subOrder.forEach((s, i) => {
-    sub.append(el("li", { class: "ord-item" }, [
+    const isSubHidden = hiddenSubs.includes(s);
+    const isHidden = isParentHidden || isSubHidden;
+    sub.append(el("li", { class: "ord-item" + (isHidden ? " is-hidden" : "") }, [
+      el("button", {
+        type: "button",
+        class: "ord-eye" + (isHidden ? " is-hidden" : ""),
+        disabled: isParentHidden,
+        title: isParentHidden
+          ? "상위 대단원이 숨겨져 있습니다"
+          : (isSubHidden ? "소단원 보이기 (조판에 포함)" : "소단원 숨기기 (조판에서 제외)"),
+        html: isHidden ? EYE_CLOSED_SVG : EYE_OPEN_SVG,
+        onclick: (e) => {
+          e.stopPropagation();
+          if (!isParentHidden) toggleSubunitHidden(selectedUnit, s);
+        },
+      }),
       el("span", { class: "ord-name", text: s || "(소단원 없음)" }),
       el("button", { type: "button", class: "mini", text: "↑", disabled: i === 0, onclick: () => moveSubOrder(subOrder, i, -1) }),
       el("button", { type: "button", class: "mini", text: "↓", disabled: i === subOrder.length - 1, onclick: () => moveSubOrder(subOrder, i, 1) }),

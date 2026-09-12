@@ -58,7 +58,7 @@ export function defaultProject() {
       start: LIMITS.numberStart.default,
       pad: LIMITS.numberPad.default,
     },
-    units: { source: UNITS_SOURCE.default, order: [], suborder: {}, map: {} },
+    units: { source: UNITS_SOURCE.default, order: [], suborder: {}, map: {}, hiddenUnits: [], hiddenSubunits: {} },
     sheets: {
       cover: { enabled: false, lines: [] },
       problems: true,
@@ -314,6 +314,8 @@ export function mergeProject(raw) {
   if (!isPlain(project.units.map)) project.units.map = {};
   if (!Array.isArray(project.units.order)) project.units.order = [];
   if (!isPlain(project.units.suborder)) project.units.suborder = {};
+  if (!Array.isArray(project.units.hiddenUnits)) project.units.hiddenUnits = [];
+  if (!isPlain(project.units.hiddenSubunits)) project.units.hiddenSubunits = {};
   if (!Array.isArray(project.sheets.cover.lines)) project.sheets.cover.lines = [];
 
   // 쪽별 예외는 배열이어야 한다 — deepMerge는 배열을 통째로 갈아 끼우므로 모양만 여기서 굳힌다.
