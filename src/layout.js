@@ -601,7 +601,11 @@ function splitAllowed(atom, keep) {
   const sp = atom._sp;
   if (!sp) return false;
   if (sp.table) return keep.allowTableSplit !== false;
-  if (atom.kind === 'passage') return keep.allowPassageSplit !== false;
+  // 지문은 문단 단위로 자른다: 한 문단 내부가 문장 단위로 쪼개지지 않도록 원자(문단) 분할은 막고,
+  // 문단끼리는 온전히 붙어있게 한다. (지문 묶음 내 문단 사이 분할은 passageWhole로 제어하며,
+  // 한 문단이 한 칸보다 큰 극단적 경우는 mustSplit이 구제한다.)
+  if (atom.kind === 'passage') return false;
+  if (atom.kind === 'choices') return keep.choicesTogether === false;
   return atom.splittable !== false;
 }
 
@@ -1261,7 +1265,17 @@ function pack(items, ctx) {
   }
 
   function gapFor(item, from) {
-    return item.firstOfProblem && from === 0 && used > 0 ? item.geom.problemGap : 0;
+    if (from > 0 || used === 0) return 0;
+    if (item.firstOfProblem) return item.geom.problemGap;
+    const k = item.atom.kind;
+    if (k === 'unit-band' || k === 'subunit-band') {
+      const cellIdx = cur.geom.fillSeq[cellPos];
+      const recs = cur ? cur.cells[cellIdx] : null;
+      const last = recs && recs.length ? recs[recs.length - 1] : null;
+      if (last && last.kind === 'unit-band' && k === 'subunit-band') return 0;
+      return item.geom.problemGap;
+    }
+    return 0;
   }
 
   /**
@@ -1312,18 +1326,27 @@ function pack(items, ctx) {
   }
 
   /**
-   * 이 원자 바로 뒤에 붙어야 할 번호·발문이 요구하는 높이(지문 사슬용).
-   * 지문을 쪼갤 때 마지막 조각 뒤에 이만큼을 남겨 두면 번호·발문이 같은 칸에 앉는다.
+   * 이 원자 바로 뒤에 붙어야 할 원자(번호·발문 또는 선지)가 요구하는 높이.
+   * - 지문을 쪼갤 때 마지막 조각 뒤에 번호·발문이 앉을 자리 예약 (passageWithFirst)
+   * - 발문/표의 마지막 조각 뒤에 첫 선지(최소 2개)가 앉을 자리 예약 (stemWithFirstChoice)
    */
   function reserveFor(item, scale) {
-    if (keep.passageWithFirst === false) return 0;
     const k = item.atom.kind;
-    if (k !== 'passage' && k !== 'intro') return 0;
     const nx = items[item._i + 1];
     if (!nx || nx.key !== item.key || nx.newPage || !sameFlow(nx, item)) return 0;
-    if (nx.atom.kind !== 'head') return 0;
-    // 지문을 가진 문항은 문항 간격(problemGap)이 맨 앞 원자에 이미 붙었으므로 여기서는 더하지 않는다.
-    return followNeed(nx, scale);
+
+    // 1) 지문/안내 문장 뒤에 번호·발문(head) 몫 예약
+    if (keep.passageWithFirst !== false && (k === 'passage' || k === 'intro') && nx.atom.kind === 'head') {
+      return followNeed(nx, scale);
+    }
+
+    // 2) 발문/표(material, stem, head) 뒤에 첫 선지(choices) 몫 예약
+    // 발문의 '끝부분'과 선지의 '첫부분'을 같은 칸에 붙이기 위해 첫 선지 몫을 예약한다.
+    if (keep.stemWithFirstChoice !== false && nx.atom.kind === 'choices') {
+      return followNeed(nx, scale);
+    }
+
+    return 0;
   }
 
   function marks(item, page) {
@@ -1372,6 +1395,7 @@ function pack(items, ctx) {
       item,
       whole: !!rec.whole,
       used: consumed,
+      gap: rec.gap || 0,
       first: !!rec.first,
       marked: false,
     };
@@ -1419,10 +1443,12 @@ function pack(items, ctx) {
     if (!prevRec.whole || !PULLABLE.has(prevRec.kind)) return false;
     const a = prevRec.item.atom;
     if (a.kind === 'passage') {
-      // 지문은 통째일 때만 사슬에 든다: 다음 지문 문단·자료·선지, 그리고 번호·발문(옵션)과 붙는다.
-      if (!passageWhole || runOversized(prevRec.item, curScale())) return false;
+      if (runOversized(prevRec.item, curScale())) return false;
       const k = item.atom.kind;
+      // 지문 끝과 번호·발문은 지문 분할 여부와 무관하게 붙어 있어야 한다(지문 끝 + 번호가 함께 이동 가능).
       if (k === 'head') return keep.passageWithFirst !== false;
+      // 지문 문단끼리 또는 자료·선지와는 지문이 통째(passageWhole)일 때만 사슬에 든다.
+      if (!passageWhole) return false;
       return k === 'passage' || k === 'material' || k === 'choices';
     }
     if (a.keepWithNext && (a.kind !== 'head' || keep.headWithStem !== false)) return true;
@@ -1602,17 +1628,20 @@ function pack(items, ctx) {
         // 앞 사슬이 칸을 다 차지해 되물릴 데가 없으면, 옮겨 봐야 같은 자리다 — 여기 놓는다.
         // (옮기면 앞 사슬만 남은 칸이 생긴다. 뒤 원자는 다음 칸에서 이어 붙거나 쪼개진다.)
         if (atStart || stuckOnChain(item)) {
-          // 그 전에 이 쪽 글자를 줄이면 둘이 함께 들어가는지 재 본다(자리는 지금 남은 만큼으로
-          // 잡는다 — 빈 칸을 기준으로 재면 어느 자리에서나 "줄이면 된다"가 되어 문서가 다 작아진다).
-          shrinkToKeep((s) => M.heightOf(item, s) + followNeed(next, s), avail);
-          warnings.push(
-            `${label(item)}: ${kindName(a.kind)} 뒤에 이어질 ${kindName(next.atom.kind)}을(를) 둘 자리가 칸에 남지 않아 떼어 놓았습니다. 격자를 줄이거나 글자 크기를 낮춰 보세요.`
-          );
-          commit(item, { node: a._node, h: h0, gap, chrome, first: true, whole: true });
-          return;
+          if (!canSplit) {
+            shrinkToKeep((s) => M.heightOf(item, s) + followNeed(next, s), avail);
+            warnings.push(
+              `${label(item)}: ${kindName(a.kind)} 뒤에 이어질 ${kindName(next.atom.kind)}을(를) 둘 자리가 칸에 남지 않아 떼어 놓았습니다. 격자를 줄이거나 글자 크기를 낮춰 보세요.`
+            );
+            commit(item, { node: a._node, h: h0, gap, chrome, first: true, whole: true });
+            return;
+          }
+          // canSplit이면 통째로 넣고 뒤 원자를 떼어놓는 대신,
+          // 아래 canSplit 블록으로 넘어가 reserve를 고려해 분할 배치하도록 유도한다.
+        } else {
+          advance(item, from);
+          continue;
         }
-        advance(item, from);
-        continue;
       }
 
       if (canSplit) {
@@ -1630,13 +1659,14 @@ function pack(items, ctx) {
           nextCell();
           continue;
         }
-        /* 번호·발문 몫을 남기느라 한 조각도 못 놓는 자리. 빈 칸에서도 그렇다면 글자를 줄여
-           보고, 다 줄여도 안 되면 그때만 몫 남기기를 포기한다(지문과 번호가 갈라진다). */
+        /* 뒤 원자 몫을 남기느라 한 조각도 못 놓는 자리. 빈 칸에서도 그렇다면 글자를 줄여
+           보고, 다 줄여도 안 되면 그때만 몫 남기기를 포기한다. */
         if (reserve > 0 && atStart) {
           shrinkToKeep((s) => M.measureHtml(item.geom, a.kind, sp.htmlFor(from, from + 1, from > 0), s) + reserveFor(item, s), avail);
           reserveOff = true;
+          const targetName = next && next.atom.kind === 'choices' ? '발문과 첫 선지' : '지문과 번호·발문';
           warnings.push(
-            `${label(item)}: 지문과 번호·발문을 한 칸에 붙이지 못해 지문 끝에서 갈랐습니다. 격자를 줄이거나 글자 크기를 낮춰 보세요.`
+            `${label(item)}: ${targetName}를 한 칸에 붙이지 못해 갈랐습니다. 격자를 줄이거나 글자 크기를 낮춰 보세요.`
           );
           continue;
         }
@@ -1667,14 +1697,17 @@ function pack(items, ctx) {
       /* 이 칸에는 아무것도 못 놓는다. 앞 사슬이 칸을 다 차지해 되물릴 수조차 없다면,
          마지막 수단으로 이 원자를 쪼개 앞 사슬에 붙인다. */
       if (from === 0 && !rescueOn && !!sp && sp.count > 1 && !splitAllowed(a, keep) && stuckOnChain(item)) {
-        // 쪼개기 전에, 글자를 줄이면 통째로 붙는 자리인지 재 본다.
-        const { take } = boundChain(item);
-        shrinkToKeep(
-          (s) => take.reduce((n, r) => n + M.heightOf(r.item, s), 0) + M.heightOf(item, s),
-          capOf(item.geom)
-        );
-        rescueOn = true;
-        continue;
+        // 선지를 쪼개지 않는 설정(choicesTogether)이면 rescue로 강제 분할하지 않는다.
+        if (a.kind !== 'choices' || keep.choicesTogether === false) {
+          // 쪼개기 전에, 글자를 줄이면 통째로 붙는 자리인지 재 본다.
+          const { take } = boundChain(item);
+          shrinkToKeep(
+            (s) => take.reduce((n, r) => n + M.heightOf(r.item, s), 0) + M.heightOf(item, s),
+            capOf(item.geom)
+          );
+          rescueOn = true;
+          continue;
+        }
       }
       advance(item, from);
     }
@@ -1759,8 +1792,8 @@ function pack(items, ctx) {
         h += M.chromeOf(items[j].geom, false, sc);
       }
     }
-    // 문항 간격은 사슬 안의 "문항 첫 원자"에 붙는다. 칸 첫머리에서 시작하는 사슬만 면제.
-    const gapless = used === 0 && items[chain.first].firstOfProblem;
+    // 문항 간격은 칸 중간에서 시작하는 사슬에 붙는다. 칸 첫머리(used === 0)에서 시작하는 사슬만 면제.
+    const gapless = used === 0;
     if (!gapless) h += items[chain.first].geom.problemGap;
     h += followNeed(chain.head, sc);
     return h;
@@ -1780,10 +1813,12 @@ function pack(items, ctx) {
     const cap = capOf(it.geom);
     // 지문을 쪼갤 수 있으면 긴 사슬도 이어 놓을 수 있다 — 마지막 조각 뒤에 번호·발문 몫을
     // 남기는 일은 place()의 reserve가 맡는다. 그래서 여기서는 "통째로 옮길지"만 따진다.
-    const splittable = chain.pre.some((j) => {
-      const a = items[j].atom;
-      return a.kind === 'passage' && splitAllowed(a, keep) && !!splitterFor(a);
-    });
+    const splittable =
+      (keep.allowPassageSplit !== false && chain.pre.filter((j) => items[j].atom.kind === 'passage').length > 1) ||
+      chain.pre.some((j) => {
+        const a = items[j].atom;
+        return a.kind === 'passage' && splitAllowed(a, keep) && !!splitterFor(a);
+      });
     let guard = 0;
     while (guard++ < cur.geom.cellCount + 2) {
       const need = chainHeight(chain, curScale());
@@ -1953,14 +1988,20 @@ function px(mm) {
 
 /** 배치 기록 하나를 실제 DOM 노드로. 측정 노드가 있으면 재사용(수식 재렌더 방지). */
 function nodeFor(rec, warnings) {
-  if (rec.node) {
-    if (rec.overflow) rec.node.classList.add('overflow');
-    return rec.node;
+  let d = rec.node;
+  if (d) {
+    if (rec.overflow) d.classList.add('overflow');
+  } else {
+    d = document.createElement('div');
+    d.className = 'atom' + (rec.overflow ? ' overflow' : '');
+    d.innerHTML = rec.html || '';
+    renderMath(d, warnings);
   }
-  const d = document.createElement('div');
-  d.className = 'atom' + (rec.overflow ? ' overflow' : '');
-  d.innerHTML = rec.html || '';
-  renderMath(d, warnings);
+  if (rec.gap > 0 && !rec.key) {
+    d.style.marginTop = 'var(--problem-gap)';
+  } else if (!rec.key && d.style && d.style.marginTop) {
+    d.style.marginTop = '';
+  }
   return d;
 }
 
