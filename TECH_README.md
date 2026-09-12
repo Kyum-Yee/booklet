@@ -23,6 +23,8 @@
 booklet/
 ├── index.html            # 웹 애플리케이션 진입점 (SPA UI 및 KaTeX 로더)
 ├── booklet.py            # 표준 라이브러리 기반 Python CLI (build / serve / inspect)
+├── start_windows.bat     # Windows 사용자용 원클릭 로컬 서버 실행 배치 파일
+├── start_mac.command     # macOS 사용자용 원클릭 로컬 서버 실행 스크립트
 ├── README.md             # 일반 사용자를 위한 ChatGPT/Claude 프로젝트 연동 가이드
 ├── TECH_README.md        # 개발자 및 에이전트를 위한 기술 명세서 (본 문서)
 ├── format.md             # 포맷 프로파일 및 파싱 규격 상세 안내서
