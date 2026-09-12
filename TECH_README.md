@@ -30,6 +30,8 @@ booklet/
 ├── format.md             # 포맷 프로파일 및 파싱 규격 상세 안내서
 ├── DESIGN.md             # 초기 모듈 설계서 및 인터페이스 계약
 ├── package.json          # Node.js 내장 테스트 러너 정의 ("scripts": { "test": "node --test" })
+├── docs/                 # 문서 보조 자료 및 시연 미디어
+│   └── demo.mp4          # booklet 실제 조판 시연 영상 (720p MP4)
 ├── src/                  # 코어 ES 모듈
 │   ├── app.js            # UI 이벤트 바인딩, 사이드바 탭 및 메인 렌더링 루프
 │   ├── parser.js         # 줄 단위 1-pass 상태기계 문제 파서
@@ -78,8 +80,10 @@ python3 booklet.py serve
 python3 booklet.py serve -p 8080
 ```
 
-### (2) 명령 한 줄로 조판 및 PDF 생성 (`build`)
-문제 파일 또는 디렉터리를 모아 standalone HTML 한 장과 인쇄용 PDF를 일괄 제작합니다.
+### (2) 명령 한 줄로 조판 및 PDF/독립 HTML 생성 (`build`)
+
+로컬 웹 서버(`localhost`)를 띄우지 않고, 터미널 명령 한 줄로 문제 파일을 조판하여 **인쇄용 PDF**를 즉시 추출하거나, **더블 클릭으로 바로 열리는 독립 HTML 사본**을 일괄 생성할 수 있습니다.
+
 ```bash
 python3 booklet.py build ./problems_dir \
   -o booklet.html \
@@ -90,10 +94,29 @@ python3 booklet.py build ./problems_dir \
   --pdf booklet.pdf
 ```
 
+#### 🛠️ 내부 동작 메커니즘 및 대체 경로 (Alternative Pipeline):
+
+1. **로컬 서버 없는 Headless Chrome PDF 직접 렌더링 (`--pdf`)**:
+   - `find_chrome()`이 시스템의 Google Chrome / Chromium 실행 파일을 자동 탐지합니다 (`/Applications/Google Chrome.app/...`, `google-chrome`, `chromium` 등).
+   - HTTP 서버(localhost)를 열지 않고도, 내부 빌드된 HTML의 file URI를 대상으로 Chrome을 헤드리스 모드로 호출합니다:
+     ```bash
+     chrome --headless=new --disable-gpu --allow-file-access-from-files \
+            --no-pdf-header-footer --virtual-time-budget=20000 \
+            --print-to-pdf=<pdf_abs> <html_file_uri>
+     ```
+   - KaTeX 수식, SVG 도형, 2단 페이지 격자가 100% 동일하게 렌더링된 인쇄용 PDF가 생성됩니다.
+
+2. **독립 HTML 번들 생성 및 더블 클릭(`file:///`)으로 localhost 없이 즉시 편집 (`-o`)**:
+   - `bundle_portable()` 함수가 `styles/page.css`, `styles/ui.css`, KaTeX CSS를 단일 HTML 내부 `<style>` 블록으로 자동 인라인합니다.
+   - 파싱된 문제 데이터(Project JSON)를 `<script>window.__BOOKLET_INITIAL_PROJECT__ = ...</script>` 형태로 HTML 헤더에 직접 삽입합니다.
+   - **결과**: 생성된 `booklet.html`은 웹 서버 없이 **로컬에서 그냥 더블 클릭(`file:///`)하는 것만으로 브라우저에서 바로 열립니다.** 문제가 이미 조판된 상태로 로드되며, 사이드바 옵션 조절, 문항 수정, 인쇄가 로컬 서버 없이도 완벽히 동작합니다.
+   - *※ 참고: 이 방식은 배치 일괄 변환이나 오프라인 배포용 파일을 만들 때 유용한 대체 경로입니다. 드래그 앤 드롭으로 새 파일을 계속 추가하거나 LocalStorage 기반으로 작업 상태를 지속 유지하는 인터랙티브 정석 워크플로우는 `booklet.py serve`입니다.*
+
 #### 주요 플래그 옵션:
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
-| `-o, --output` | `./booklet.html` | 생성될 독립 HTML 파일 경로 |
+| `-o, --output` | `./booklet.html` | 생성될 독립 HTML 파일 경로 (더블 클릭으로 로컬 서버 없이 실행 가능) |
+| `--pdf` | `None` | Chrome headless를 호출하여 localhost 없이 PDF 직접 출력 |
 | `--title` | `""` | 문제집 표지 및 머리말 제목 |
 | `--subtitle` | `""` | 부제 |
 | `--subject` | `auto` | 과목 (`auto`, `국어`, `영어`, `수학`, `화학`, `기타`) |
@@ -104,7 +127,6 @@ python3 booklet.py build ./problems_dir \
 | `--prefer` | `원본` | `_원본`/`_view` 쌍이 있을 때 우선할 파일 (`원본`, `view`) |
 | `--manifest` | `None` | 문항별 단원 수동 매핑 JSON 파일 경로 |
 | `--json` | `None` | 프로젝트 데이터만 `.booklet.json`으로 저장 |
-| `--pdf` | `None` | Chrome headless를 호출하여 PDF 직접 출력 |
 | `--open` | `False` | 빌드 완료 후 시스템 기본 뷰어로 열기 |
 
 ### (3) 파일 통계 검사 (`inspect`)
